@@ -1,7 +1,8 @@
 #!/bin/bash
 shopt -s extglob
 export SHUTDOWN_MIN=now
-export SCRIPTS_URL=https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/
+#export SCRIPTS_URL=https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/
+export SCRIPTS_URL=https://raw.githubusercontent.com/freezecoder/tibanna/master/awsf/
 export LANGUAGE=cwl_draft3
 export PASSWORD=
 export ACCESS_KEY=
@@ -260,7 +261,17 @@ then
 else
   LANGUAGE_OPTION=
 fi
-exle ./aws_upload_output_update_json.py $RUN_JSON_FILE_NAME $LOGJSONFILE $LOGFILE $LOCAL_OUTDIR/$MD5FILE $POSTRUN_JSON_FILE_NAME $LANGUAGE_OPTION
+
+
+set -x
+echo "INFO: Running modified Z-data download: AWS Sync"
+if [[ $LANGUAGE == 'wdl' ]];then
+	echo "Doing a copy of the wdl folder"
+	aws s3 sync /data1/wdl/cromwell-executions $WDL_URL 
+fi
+
+echo "Running AWS update_run_json"
+./aws_upload_output_update_json.py $RUN_JSON_FILE_NAME $LOGJSONFILE $LOGFILE $LOCAL_OUTDIR/$MD5FILE $POSTRUN_JSON_FILE_NAME $LANGUAGE_OPTION
 mv $POSTRUN_JSON_FILE_NAME $RUN_JSON_FILE_NAME
 send_log
  
@@ -273,7 +284,10 @@ export INPUTSIZE=$(du -csh /data1/input| tail -1 | cut -f1)
 export TEMPSIZE=$(du -csh /data1/tmp*| tail -1 | cut -f1)
 export OUTPUTSIZE=$(du -csh /data1/out| tail -1 | cut -f1)
 
+
 exl ./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
+
+
 if [[ $PUBLIC_POSTRUN_JSON == '1' ]]
 then
   exle aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME --acl public-read
