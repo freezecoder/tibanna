@@ -210,7 +210,14 @@ mkdir -p $LOCAL_WF_TMPDIR
 #send_log_regularly &
 if [[ $LANGUAGE == 'wdl' ]]
 then
-  exl java -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE
+#Make cromwell option file
+cat << HERE > cromwell_options.json
+{
+    "final_workflow_outputs_dir" : "$LOCAL_OUTDIR"
+}
+HERE
+  #Run cromwelll with options to write outputs to $LOCAL_OUTDIR
+  exl java -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
 elif [[ $LANGUAGE == 'snakemake' ]]
 then
   exl echo "running $COMMAND in docker image $CONTAINER_IMAGE..."
@@ -241,7 +248,8 @@ cd $cwd0
 send_log 
 
 ### copy output files to s3
-md5sum $LOCAL_OUTDIR/* | grep -v "$LOGFILE" >> $MD5FILE ;  ## calculate md5sum for output files (except log file, to avoid confusion)
+find $LOCAL_OUTDIR/ -type f |xargs md5sum {} \
+| grep -v "$LOGFILE" >> $MD5FILE ;  ## calculate md5sum for output files (except log file, to avoid confusion)
 mv $MD5FILE $LOCAL_OUTDIR
 exl date ## done time
 send_log
@@ -268,7 +276,14 @@ set -x
 echo "INFO: Running modified Z-data download: AWS Sync"
 if [[ $LANGUAGE == 'wdl' ]];then
 	echo "Doing a copy of the wdl folder"
-	aws s3 sync /data1/wdl/cromwell-executions $WDL_URL 
+	export s3buck=`echo $WDL_URL |perl -pe 's@s3://@@;s/\/.+//'`
+	aws s3 sync $LOCAL_OUTDIR/ $WDL_URL 
+	#copy file listing over
+	aws s3api  list-objects-v2 --prefix  $JOBID.workflow  --bucket $s3buck > listing.txt
+	aws s3  cp listing.txt  s3://$s3buck/$JOBID.outfiles
+	touch $JOBID.success 
+	aws s3 cp $JOBID.success s3://$LOGBUCKET/
+
 fi
 
 echo "Running AWS update_run_json"
@@ -286,16 +301,16 @@ export TEMPSIZE=$(du -csh /data1/tmp*| tail -1 | cut -f1)
 export OUTPUTSIZE=$(du -csh /data1/out| tail -1 | cut -f1)
 
 
-#exl ./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
-./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
+exl ./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
+#./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
 
 
 if [[ $PUBLIC_POSTRUN_JSON == '1' ]]
 then
   aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME --acl public-read
 else
-  #exle aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME
-  aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME
+  exle aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME
+  #aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME
 fi
 if [ ! -z $JOB_STATUS -a $JOB_STATUS == 0 ]; then touch $JOBID.success; aws s3 cp $JOBID.success s3://$LOGBUCKET/; fi
 send_log
