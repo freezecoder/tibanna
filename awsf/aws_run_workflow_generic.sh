@@ -128,6 +128,7 @@ exl wget $SCRIPTS_URL/aws_decode_run_json.py
 exl wget $SCRIPTS_URL/aws_update_run_json.py
 exl wget $SCRIPTS_URL/aws_upload_output_update_json.py
 exl wget $SCRIPTS_URL/download_workflow.py
+exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
 
 exl echo $JSON_BUCKET_NAME
 exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
@@ -217,7 +218,7 @@ cat << HERE > cromwell_options.json
 }
 HERE
   #Run cromwelll with options to write outputs to $LOCAL_OUTDIR
-  exl java -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
+    exl java -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
 elif [[ $LANGUAGE == 'snakemake' ]]
 then
   exl echo "running $COMMAND in docker image $CONTAINER_IMAGE..."
