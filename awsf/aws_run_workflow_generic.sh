@@ -220,8 +220,8 @@ HERE
   #Run cromwelll with options to write outputs to $LOCAL_OUTDIR
     echo Subbing $JOBID for logging	
      sed -i  "s/bioinfo_docker/biodocker_$JOBID/"  /home/ubuntu/cromwell.conf
-    ( echo cd $PWD; echo java -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json ) > /home/ubuntu/runCromwellz.cmd.sh
-    exl java -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
+    ( echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json ) > /home/ubuntu/runCromwellz.cmd.sh
+    exl java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
 elif [[ $LANGUAGE == 'snakemake' ]]
 then
   exl echo "running $COMMAND in docker image $CONTAINER_IMAGE..."
