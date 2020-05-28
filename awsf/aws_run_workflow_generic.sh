@@ -62,6 +62,11 @@ export STATUS=0
 export ERRFILE=$LOCAL_OUTDIR/$JOBID.error  # if this is found on s3, that means something went wrong.
 export INSTANCE_ID=$(ec2-metadata -i|cut -d' ' -f2)
 
+#define cloudwatch log group for messaging to this job
+export LOG_STREAM="biodocker_"$JOBID"_`hostname`"
+export LOG_GROUP="clouddockerjobs"
+
+
 if [[ $LANGUAGE == 'wdl' ]]
 then
   echo "`date` Running WDL Pipeline"
@@ -125,10 +130,15 @@ fi
 
 ### 2. get the run.json file and parse it to get environmental variables WDL_URL, MAIN_WDL, and LOGBUCKET and create an inputs.yml file (INPUT_YML_FILE).
 exl wget $SCRIPTS_URL/aws_decode_run_json.py
+exl wget $SCRIPTS_URL/aws_postrun.py
 exl wget $SCRIPTS_URL/aws_update_run_json.py
 exl wget $SCRIPTS_URL/aws_upload_output_update_json.py
 exl wget $SCRIPTS_URL/download_workflow.py
 exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
+
+export postrunpy="`pwd`/aws_postrun.py"
+
+$postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 
 exl echo $JSON_BUCKET_NAME
 exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
@@ -158,6 +168,8 @@ send_log
 
 ### download cwl from github or any other url.
 pip install boto3
+pip install watchtower #for logging
+
 exl ./download_workflow.py
 
 # set up cronjojb for cloudwatch metrics for memory, disk space and CPU utilization
@@ -187,6 +199,8 @@ exl date
 exl ls
 send_log 
 
+
+$postrunpy  -cmd message -message "Mounting input buckets"
 ### mount input buckets
 exl cat $MOUNT_COMMAND_FILE
 exl date
@@ -209,6 +223,10 @@ cwd0=$(pwd)
 cd $LOCAL_WFDIR  
 mkdir -p $LOCAL_WF_TMPDIR
 #send_log_regularly &
+
+
+
+
 if [[ $LANGUAGE == 'wdl' ]]
 then
 #Make cromwell option file
@@ -219,9 +237,18 @@ cat << HERE > cromwell_options.json
 HERE
   #Run cromwelll with options to write outputs to $LOCAL_OUTDIR
     echo Subbing $JOBID for logging	
+    $postrunpy  -cmd message -message "Starting Cromwell"
+    $postrunpy -cmd status -status "running-cromwell"
      sed -i  "s/bioinfo_docker/biodocker_$JOBID/"  /home/ubuntu/cromwell.conf
+    
+    $postrunpy  -cmd message -message "Entering Docker logging space"
+
     ( echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json ) > /home/ubuntu/runCromwellz.cmd.sh
     exl java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
+    
+    $postrunpy  -cmd message -message "Cromwell Execution done"
+    
+  
 elif [[ $LANGUAGE == 'snakemake' ]]
 then
   exl echo "running $COMMAND in docker image $CONTAINER_IMAGE..."
@@ -279,16 +306,37 @@ fi
 set -x
 echo "INFO: Running modified Z-data download: AWS Sync"
 if [[ $LANGUAGE == 'wdl' ]];then
-	echo "Doing a copy of the wdl folder"
+	echo "`date` WDL Doing a copy of the wdl folder"
+	echo "Doing a copy of the wdl folder" >> $LOGFILE
+  send_log
+  
+  $postrunpy  -cmd message -message "Uploading outputs to S3"
+  $postrunpy -cmd status -status "running-postcleanup"
+
+  
 	export s3buck=`echo $WDL_URL |perl -pe 's@s3://@@;s/\/.+//'`
 	aws s3 sync $LOCAL_OUTDIR/ $WDL_URL 
 	#copy file listing over
 	aws s3api  list-objects-v2 --prefix  $JOBID.workflow  --bucket $s3buck > listing.txt
 	aws s3  cp listing.txt  s3://$s3buck/$JOBID.outfiles
+	
+	echo "`date` listing created for $JOBID" >> $LOGFILE
+	send_log
+  $postrunpy  -cmd message -message "Cloud file listing created"
+
+	
+	
 	touch $JOBID.success 
-	aws s3 cp $JOBID.success s3://$LOGBUCKET/
+	aws s3 cp $JOBID.success s3://$LOGBUCKET/ #This will trigger job success to be found in the polling script 
+  $postrunpy  -cmd message -message "Success file created $JOBID.success"
+
+  echo "`date` success file uploaded" >> $LOGFILE
+  send_log
+  
 
 fi
+
+$postrunpy  -cmd message -message "Running AWS update_run_json"
 
 echo "Running AWS update_run_json"
 ./aws_upload_output_update_json.py $RUN_JSON_FILE_NAME $LOGJSONFILE $LOGFILE $LOCAL_OUTDIR/$MD5FILE $POSTRUN_JSON_FILE_NAME $LANGUAGE_OPTION
