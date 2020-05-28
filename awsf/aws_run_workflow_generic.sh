@@ -66,6 +66,9 @@ export INSTANCE_ID=$(ec2-metadata -i|cut -d' ' -f2)
 export LOG_STREAM="biodocker_"$JOBID"_`hostname`"
 export LOG_GROUP="clouddockerjobs"
 
+echo export LOG_STREAM="biodocker_"$JOBID"_`hostname`" > ~/logger.env
+echo export LOG_GROUP="clouddockerjobs" >>  ~/logger.env
+
 
 if [[ $LANGUAGE == 'wdl' ]]
 then
@@ -137,6 +140,7 @@ exl wget $SCRIPTS_URL/download_workflow.py
 exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
 
 export postrunpy="`pwd`/aws_postrun.py"
+$postrunpy  -cmd message -message "### Cloud Job Beginning ###"
 
 $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 

@@ -14,6 +14,8 @@ import watchtower, logging
 from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 
+
+session= boto3.Session(region_name = 'us-east-1')
 s3 = boto3.client('s3')
 
 
@@ -33,9 +35,9 @@ def make_logger(name=LOG_GROUP,stream=LOG_STREAM):
 
   logger.addHandler(ch)
   if stream is None:
-    logger.addHandler(watchtower.CloudWatchLogHandler(log_group=name))
+    logger.addHandler(watchtower.CloudWatchLogHandler(log_group=name,boto3_session=session))
   else:
-    logger.addHandler(watchtower.CloudWatchLogHandler(log_group=name,stream_name=stream))
+    logger.addHandler(watchtower.CloudWatchLogHandler(log_group=name,stream_name=stream,boto3_session=session))
   return(logger)
 
 
