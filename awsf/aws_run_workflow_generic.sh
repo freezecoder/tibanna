@@ -43,6 +43,7 @@ while getopts "i:m:j:l:L:u:p:a:s:r:g" opt; do
         esac
 done
 
+
 export RUN_JSON_FILE_NAME=$JOBID.run.json
 export POSTRUN_JSON_FILE_NAME=$JOBID.postrun.json
 export EBS_DIR=/data1  ## WARNING: also hardcoded in aws_decode_run_json.py
@@ -143,6 +144,10 @@ export postrunpy="`pwd`/aws_postrun.py"
 $postrunpy  -cmd message -message "### Cloud Job Beginning ###"
 
 $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
+
+export MAXHOURS=32 #max time to run the instance before shutting it down
+echo sudo shutdown -h now | at now + $MAXHOURS hours
+
 
 exl echo $JSON_BUCKET_NAME
 exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
@@ -311,38 +316,45 @@ set -x
 echo "INFO: Running modified Z-data download: AWS Sync"
 if [[ $LANGUAGE == 'wdl' ]];then
 	echo "`date` WDL Doing a copy of the wdl folder"
-	echo "Doing a copy of the wdl folder" >> $LOGFILE
-  send_log
-  
-  $postrunpy  -cmd message -message "Uploading outputs to S3"
-  $postrunpy -cmd status -status "running-postcleanup"
+	echo "`date` Doing a copy of the wdl folder" >> $LOGFILE
+  	send_log
 
+        $postrunpy  -cmd message -message "Uploading outputs to S3..."
   
 	export s3buck=`echo $WDL_URL |perl -pe 's@s3://@@;s/\/.+//'`
 	aws s3 sync $LOCAL_OUTDIR/ $WDL_URL 
 	#copy file listing over
+	$postrunpy -cmd message -message  "File sync to S3 complete to $WDL_URL"
+	echo "`date` S3 upload done" >> $LOGFILE
+  	send_log
+ 
+	$postrunpy -cmd message -message "running-postcleanup"
 	aws s3api  list-objects-v2 --prefix  $JOBID.workflow  --bucket $s3buck > listing.txt
 	aws s3  cp listing.txt  s3://$s3buck/$JOBID.outfiles
 	
+
+	cat listing.txt  >> $LOGFILE
+  	send_log
+	
 	echo "`date` listing created for $JOBID" >> $LOGFILE
 	send_log
-  $postrunpy  -cmd message -message "Cloud file listing created"
+        $postrunpy  -cmd message -message "Cloud file listing created"
 
-	
 	
 	touch $JOBID.success 
 	aws s3 cp $JOBID.success s3://$LOGBUCKET/ #This will trigger job success to be found in the polling script 
-  $postrunpy  -cmd message -message "Success file created $JOBID.success"
+         $postrunpy  -cmd message -message "Success file created $JOBID.success"
 
-  echo "`date` success file uploaded" >> $LOGFILE
-  send_log
+  	echo "`date` success file $JOBID.success uploaded" >> $LOGFILE
+  	send_log
   
 
 fi
 
-$postrunpy  -cmd message -message "Running AWS update_run_json"
+$postrunpy  -cmd message -message "Running AWS update_run_json py"
 
-echo "Running AWS update_run_json"
+echo "Running AWS update_run_json" >> $LOGFILE && send_log
+
 ./aws_upload_output_update_json.py $RUN_JSON_FILE_NAME $LOGJSONFILE $LOGFILE $LOCAL_OUTDIR/$MD5FILE $POSTRUN_JSON_FILE_NAME $LANGUAGE_OPTION
 mv $POSTRUN_JSON_FILE_NAME $RUN_JSON_FILE_NAME
 send_log

@@ -173,7 +173,7 @@ for k in output_meta:
     print("uploading output file {} upload to {}".format(source, bucket + '/' + target))
     try:
         # s3.upload_file(source, bucket, target)
-        upload_to_s3(s3, source, bucket, target)
+        print("Disabled upload of target")#upload_to_s3(s3, source, bucket, target)
     except Exception as e:
         raise Exception("output file {} upload to {} failed. %s".format(source, bucket + '/' + target) % e)
     try:
