@@ -161,7 +161,19 @@ exl lsblk $TMPLOGFILE
 export EBS_DEVICE=/dev/$(lsblk | tail -1 | cut -f1 -d' ')
 exl mkfs -t ext4 $EBS_DEVICE # creating a file system
 exl mkdir $EBS_DIR
-exl mount $EBS_DEVICE $EBS_DIR # mount
+
+
+######### CHANGING OF MOUNT
+#Need to switch config in tibanna for:   "ebs_size": 50 and "root_ebs_size": 300 , making root_ebs_size large
+#Proposed Changes the mount_point
+exl mkdir /dataebs
+exl mount $EBS_DEVICE /dataebs # mount ebs
+exl chown -R ubuntu /dataebs
+exl chmod -R +x /dataebs
+
+#Remove this part for root volume usage
+#exl mount $EBS_DEVICE $EBS_DIR # mount
+
 exl chown -R ubuntu $EBS_DIR
 exl chmod -R +x $EBS_DIR
 
