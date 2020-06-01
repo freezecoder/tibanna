@@ -14,18 +14,34 @@ import watchtower, logging
 from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 
-
-session= boto3.Session(region_name = 'us-east-1')
-s3 = boto3.client('s3')
-
-
-#acquire the log details from env. variables
-JOBTBL="bgm-jobs"
-LOG_GROUP=os.environ["LOG_GROUP"]
-LOG_STREAM=os.environ["LOG_STREAM"]
-JOBID=os.environ["JOBID"]
+## Do updates to dynamodb and job status from running vm,requires apt IAM Roles for Dynamodb
 
 source_directory = '/data1/out/'
+region='us-east-1'
+session= boto3.Session(region_name = region)
+s3 = boto3.client('s3',region_name=region)
+
+JOBTBL="bgm-jobs"
+LOG_GROUP="zeegenomics"
+LOG_STREAM="defaultstream"
+JOBID="somejobid"
+OUTBUCKET="somebucket"
+
+#acquire the log details from env. variables
+try:
+	LOG_GROUP=os.environ["LOG_GROUP"]
+	LOG_STREAM=os.environ["LOG_STREAM"]
+	JOBID=os.environ["JOBID"]
+except Exception as e:
+	print("Sorry: did not find env variables LOG_GROUP, LOG_STREAM and JOBID")
+	print(str(e))
+	pass
+
+try:
+	BUCKETNAME=os.environ["OUTBUCKET"]
+except:
+	pass
+
 
 #Create logger
 def make_logger(name=LOG_GROUP,stream=LOG_STREAM):
@@ -45,7 +61,7 @@ def make_logger(name=LOG_GROUP,stream=LOG_STREAM):
 """ Update the job table  """
 def update_jobs(jobid=JOBID,tblname=JOBTBL,col='description',value='A new description from me'):
     expr="set "+str(col)+"= :r"
-    table = boto3.resource('dynamodb').Table(tblname)
+    table = boto3.resource('dynamodb',region_name=region).Table(tblname)
     response = table.update_item(
         Key={
             'jobid': jobid,
@@ -116,7 +132,7 @@ def upload_to_s3(s3, source, bucket, target):
 
 if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="")
-  parser.add_argument("-cmd", help="Message. Any of message,touch,status",default="message",required=True)
+  parser.add_argument("-cmd", help="Task to run. message,touch,status,addfiles",default="message",required=True)
   parser.add_argument("-message", help="Message text",required=False,default="Hi there")
   parser.add_argument("-status", help="Message text",required=False,default="running")
   args = parser.parse_args()
@@ -136,6 +152,8 @@ if __name__ == "__main__":
     print("Setting job status to "+status)
     set_job(JOBID,status)
     update_jobtime(JOBID)
+  elif cmd=="addfiles":
+    print("Add files (not implemented yet")
     
     
     

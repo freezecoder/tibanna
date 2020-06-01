@@ -167,12 +167,12 @@ exl mkdir $EBS_DIR
 #Need to switch config in tibanna for:   "ebs_size": 50 and "root_ebs_size": 300 , making root_ebs_size large
 #Proposed Changes the mount_point
 exl mkdir /dataebs
-exl mount $EBS_DEVICE /dataebs # mount ebs
+exl mount $EBS_DEVICE /dataebs # mount ebs, remove to change bacl
 exl chown -R ubuntu /dataebs
 exl chmod -R +x /dataebs
 
 #Remove this part for root volume usage
-#exl mount $EBS_DEVICE $EBS_DIR # mount
+#exl mount $EBS_DEVICE $EBS_DIR # mount , uncomment to change back
 
 exl chown -R ubuntu $EBS_DIR
 exl chmod -R +x $EBS_DIR
@@ -268,6 +268,7 @@ HERE
     exl java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
     
     $postrunpy  -cmd message -message "Cromwell Execution done"
+    $postrunpy -cmd status -status "syncing-outputs"
     
   
 elif [[ $LANGUAGE == 'snakemake' ]]
@@ -353,6 +354,8 @@ if [[ $LANGUAGE == 'wdl' ]];then
         $postrunpy  -cmd message -message "Cloud file listing created"
 
 	
+         $postrunpy -cmd status -status "finishing"
+
 	touch $JOBID.success 
 	aws s3 cp $JOBID.success s3://$LOGBUCKET/ #This will trigger job success to be found in the polling script 
          $postrunpy  -cmd message -message "Success file created $JOBID.success"
