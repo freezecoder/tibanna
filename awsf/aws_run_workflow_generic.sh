@@ -190,6 +190,8 @@ send_log
 ### download cwl from github or any other url.
 pip install boto3
 pip install watchtower #for logging
+pip install pynamodb #for interacting with dynamodb in python
+
 
 exl ./download_workflow.py
 

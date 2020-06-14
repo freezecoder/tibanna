@@ -14,6 +14,8 @@ import watchtower, logging
 from datetime import datetime
 logging.basicConfig(level=logging.INFO)
 
+
+
 ## Do updates to dynamodb and job status from running vm,requires apt IAM Roles for Dynamodb
 
 source_directory = '/data1/out/'
@@ -21,6 +23,7 @@ region='us-east-1'
 session= boto3.Session(region_name = region)
 s3 = boto3.client('s3',region_name=region)
 
+BUCKETNAME=""
 JOBTBL="bgm-jobs"
 LOG_GROUP="zeegenomics"
 LOG_STREAM="defaultstream"
@@ -40,7 +43,29 @@ except Exception as e:
 try:
 	BUCKETNAME=os.environ["OUTBUCKET"]
 except:
+	print("OUTBUCKET environment variable not defined")
+	print("Setting BUCKETNAME to empty string")
 	pass
+
+
+
+from pynamodb.models import Model
+import uuid
+from pynamodb.attributes import ( UnicodeAttribute, NumberAttribute, UnicodeSetAttribute, UTCDateTimeAttribute)
+class Bgmofiles(Model):
+    """
+    AWS Cloud file storage bucket
+    A DynamoDB Output files from cloud
+    """
+    class Meta:
+        table_name = "bgm-ofiles"
+        region = 'us-east-1'
+    name = UnicodeAttribute(hash_key=True,default="somefile"+str(uuid.uuid4()))
+    jobid = UnicodeAttribute(hash_key=False,default=uuid.uuid4())
+    size = NumberAttribute(null=True,default=0)
+    bucket=UnicodeAttribute(null=True,default=BUCKETNAME)
+    created = UTCDateTimeAttribute(null=True,default=datetime.now())
+    modified = UTCDateTimeAttribute(null=True,default=datetime.now())
 
 
 #Create logger
@@ -104,6 +129,27 @@ def parse_command(logfile):
                     command_list.append(command)
                     command = []
     return(command_list)
+
+
+def add_cloud_from_s3(bucket=BUCKETNAME,key="somekey",jobid="somejobid",suffix=None):
+    print("Adding Data from cloud to db table")
+    s3 = boto3.resource('s3')
+    bucketobj = s3.Bucket(bucket)
+    print("Fetching files from s3://+"+str(bucket)+"/"+str(key))
+    try:
+      for obj in bucketobj.objects.filter(Prefix=key):
+        print("S3:  Adding "+ bucket + " " + str(obj.key) + " to " + jobid + " to bgm-ofiles dynamodb")
+        of=Bgmofiles(obj.key)
+        of.bucket=bucket
+        of.jobid=jobid
+        of.size=int(obj.size)
+        of.created=obj.last_modified
+        of.modified=obj.last_modified
+        of.save()
+    except Exception as e:
+        print("Failed")
+        print(e)
+
 
 
 def upload_to_s3(s3, source, bucket, target):
