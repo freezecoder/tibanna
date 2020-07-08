@@ -260,9 +260,8 @@ def create_env_def_file(env_filename, d, language):
             f_env.write("export CONTAINER_IMAGE={}\n".format(d["Job"]["App"]["container_image"]))
         #raw shell script invocation
         elif language == 'rawbash':
-            #f_env.write("export COMMAND=\"{}\"\n".format(d["Job"]["App"]["command"].replace("\"", "\\\"")))
-            f_env.write("export CONTAINER_IMAGE={}\n".format(d["Job"]["App"]["container_image"]))
-            #f_env.write("export SHELLARGST={}\n".format(d["Job"]["App"]["shellargs"]))
+            f_env.write("export CONTAINER_IMAGE={}\n".format(d["Job"]["App"]["cwl_url"]))
+            f_env.write("export SCRIPT_ARGS={}\n".format(d["Job"]["App"]["main_cwl"]))
         else:  # cwl
             f_env.write("export CWL_URL={}\n".format(d["Job"]["App"]["cwl_url"]))
             f_env.write("export MAIN_CWL={}\n".format(d["Job"]["App"]["main_cwl"]))
