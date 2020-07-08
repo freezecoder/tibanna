@@ -296,9 +296,19 @@ then
   SCRIPTNAME=`basename $CONTAINER_IMAGE`
   aws s3 cp $CONTAINER_IMAGE $SCRIPTNAME
   exl echo "running bash $SCRIPTNAME  as rawbash" >> $LOGFILE
+
+  $postrunpy -cmd status -status "running"
+
+
   bash $SCRIPTNAME  2>&1 | tee -a $LOGFILE
   ERRCODE=$?; STATUS+=,$ERRCODE;
-  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi;
+  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then 
+        $postrunpy -cmd status -status "failed"
+	send_error
+  else
+	 $postrunpy -cmd status -status "completed" 
+   fi
+ 
   LOGJSONFILE='-'  # no file
   exl echo "running Bash $SCRIPTNAME  completed " >> $LOGFILE
 else
