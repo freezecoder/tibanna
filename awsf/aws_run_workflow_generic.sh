@@ -16,7 +16,7 @@ printHelpAndExit() {
     echo "-m SHUTDOWN_MIN : Possibly user can specify SHUTDOWN_MIN to hold it for a while for debugging. (default 'now')"
     echo "-j JSON_BUCKET_NAME : bucket for sending run.json file. This script gets run.json file from this bucket. e.g.: 4dn-aws-pipeline-run-json (required)"
     echo "-l LOGBUCKET : bucket for sending log file (required)"
-    echo "-L LANGUAGE : workflow language ('cwl_draft3', 'cwl_v1', 'wdl', 'snakemake', or 'shell') (default cwl_draft3)"
+    echo "-L LANGUAGE : workflow language ('cwl_draft3', 'cwl_v1', 'wdl', 'snakemake', or 'shell' or 'rawbash') (default cwl_draft3)"
     echo "-u SCRIPTS_URL : Tibanna repo url (default: https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/)"
     echo "-p PASSWORD : Password for ssh connection for user ec2-user (if not set, no password-based ssh)"
     echo "-a ACCESS_KEY : access key for certain s3 bucket access (if not set, use IAM permission only)"
@@ -79,6 +79,9 @@ elif [[ $LANGUAGE == 'snakemake' ]]
 then
   export LOCAL_WFDIR=$EBS_DIR/snakemake
 elif [[ $LANGUAGE == 'shell' ]]
+then
+  export LOCAL_WFDIR=$EBS_DIR/shell
+elif [[ $LANGUAGE == 'rawbash' ]]
 then
   export LOCAL_WFDIR=$EBS_DIR/shell
 else
@@ -286,6 +289,18 @@ then
   docker run --privileged -v $EBS_DIR:$EBS_DIR:rw -w $LOCAL_WFDIR $DOCKER_ENV_OPTION $CONTAINER_IMAGE sh -c "$COMMAND" >> $LOGFILE 2>> $LOGFILE; ERRCODE=$?; STATUS+=,$ERRCODE;
   if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi;
   LOGJSONFILE='-'  # no file
+elif [[ $LANGUAGE == 'rawbash' ]]
+then
+  #Raw Bash shell mode (addition), allows us to run whatever we want
+  $postrunpy  -cmd message -message "Raw bash mode: Bash Command"
+  SCRIPTNAME=`basename $CONTAINER_IMAGE`
+  aws s3 cp $CONTAINER_IMAGE $SCRIPTNAME
+  exl echo "running bash $SCRIPTNAME  as rawbash" >> $LOGFILE
+  bash $SCRIPTNAME  2>&1 | tee -a $LOGFILE
+  ERRCODE=$?; STATUS+=,$ERRCODE;
+  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi;
+  LOGJSONFILE='-'  # no file
+  exl echo "running Bash $SCRIPTNAME  completed " >> $LOGFILE
 else
   if [[ $LANGUAGE == 'cwl_draft3' ]]
   then
@@ -320,6 +335,9 @@ elif [[ $LANGUAGE == 'snakemake' ]]
 then
   LANGUAGE_OPTION=snakemake
 elif [[ $LANGUAGE == 'shell' ]]
+then
+  LANGUAGE_OPTION=shell
+elif [[ $LANGUAGE == 'rawbash' ]]
 then
   LANGUAGE_OPTION=shell
 else
