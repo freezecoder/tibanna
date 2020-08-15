@@ -308,6 +308,10 @@ then
   else
 	 $postrunpy -cmd status -status "completed" 
    fi
+
+  export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
+  aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/
+
  
   LOGJSONFILE='-'  # no file
   exl echo "running Bash $SCRIPTNAME  completed " >> $LOGFILE
