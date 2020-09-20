@@ -119,13 +119,24 @@ send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: 
 LOGFILE=$LOGFILE1
 cd /home/ubuntu/
 #pip install awscli
+export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
+exl echo " aws cli PATH Updated"
 export PATH=/home/ubuntu/.local/bin:$PATH
+exl echo "Adjusted Python path libs"
+exl source $ENV_FILE
+
+exl echo "Testing AWS CLI..."
+exl aws s3 ls $OUTBUCKET | head -20
+echo checkpoint1 > checkpoint1.txt
+exl aws s3 cp checkpoint1.txt $WDL_URL
+
+
+
 
 touch $LOGFILE 
 
 exl date  ## start logging
 
-exl echo " aws cli PATH Updated"
 exl echo $PATH
 
 exl echo "AWS CLI Upgraded"
