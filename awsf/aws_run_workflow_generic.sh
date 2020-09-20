@@ -118,8 +118,17 @@ send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: 
 ### start with a log under the home directory for ubuntu. Later this will be moved to the output directory, once the ebs is mounted.
 LOGFILE=$LOGFILE1
 cd /home/ubuntu/
+pip install awscli
+
 touch $LOGFILE 
+
 exl date  ## start logging
+
+exl echo "Upgrading aws cli"
+
+exl echo "AWS CLI Upgraded"
+exl aws --version
+
 
 ### sshd configure for password recognition
 -echo -ne "$PASSWORD\n$PASSWORD\n" | passwd ubuntu
@@ -218,6 +227,7 @@ exl echo "user_allow_other" >> /etc/fuse.conf
 export GOOFYS_COMMAND='./goofys-latest -o allow_other -o nonempty'
 
 ### download data & reference files from s3
+exl echo "DOWNLOADING INPUTS.."
 exl cat $DOWNLOAD_COMMAND_FILE
 exl date 
 exle source $DOWNLOAD_COMMAND_FILE 
