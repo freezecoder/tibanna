@@ -182,7 +182,7 @@ exl chmod -R +x .
 exl ./aws_decode_run_json.py $RUN_JSON_FILE_NAME
 
 if [ -e $ENV_FILE ];then
-	exl source $ENV_FILE
+	source $ENV_FILE
 fi
 
 ###  mount the EBS volume to the EBS_DIR
