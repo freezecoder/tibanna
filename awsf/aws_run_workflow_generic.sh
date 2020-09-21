@@ -128,11 +128,9 @@ if [ -e $ENV_FILE ];then
 	source $ENV_FILE
 	exl echo "Testing AWS CLI..."
 	aws s3 ls $OUTBUCKET | head -20
+	echo checkpoint1 > checkpoint1.txt
+	aws s3 cp checkpoint1.txt $WDL_URL
 fi
-
-echo checkpoint1 > checkpoint1.txt
-exl aws s3 cp checkpoint1.txt $WDL_URL
-
 
 
 
