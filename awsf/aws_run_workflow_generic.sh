@@ -123,10 +123,13 @@ export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
 exl echo " aws cli PATH Updated"
 export PATH=/home/ubuntu/.local/bin:$PATH
 exl echo "Adjusted Python path libs"
-exl source $ENV_FILE
 
-exl echo "Testing AWS CLI..."
-exl aws s3 ls $OUTBUCKET | head -20
+if [ -e $ENV_FILE ];then
+	source $ENV_FILE
+	exl echo "Testing AWS CLI..."
+	aws s3 ls $OUTBUCKET | head -20
+fi
+
 echo checkpoint1 > checkpoint1.txt
 exl aws s3 cp checkpoint1.txt $WDL_URL
 
@@ -179,7 +182,10 @@ exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
 exl chown -R ubuntu .
 exl chmod -R +x .
 exl ./aws_decode_run_json.py $RUN_JSON_FILE_NAME
-exl source $ENV_FILE
+
+if [ -e $ENV_FILE ];then
+	exl source $ENV_FILE
+fi
 
 ###  mount the EBS volume to the EBS_DIR
 exl lsblk $TMPLOGFILE
