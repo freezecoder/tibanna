@@ -92,8 +92,8 @@ fi
 echo -ne "$ACCESS_KEY\n$SECRET_KEY\n$REGION\njson" | aws configure --profile user1
 
 #set python path
-export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
-export PATH=/home/ubuntu/.local/bin:$PATH
+#export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
+#export PATH=/home/ubuntu/.local/bin:$PATH
 
 
 # first create an output bucket/directory
@@ -213,7 +213,7 @@ LOGFILE=$LOGFILE2
 send_log
 
 ### download cwl from github or any other url.
-pip install boto3
+#pip install boto3
 pip install watchtower #for logging
 pip install pynamodb #for interacting with dynamodb in python
 
