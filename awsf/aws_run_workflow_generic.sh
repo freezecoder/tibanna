@@ -118,23 +118,25 @@ send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: 
 ### start with a log under the home directory for ubuntu. Later this will be moved to the output directory, once the ebs is mounted.
 LOGFILE=$LOGFILE1
 cd /home/ubuntu/
-pip install awscli
+#pip install awscli
 export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
-exl echo " aws cli PATH Updated"
 export PATH=/home/ubuntu/.local/bin:$PATH
+exl echo " aws cli PATH Updated"
 exl echo "Adjusted Python path libs"
 
-if [ -e $ENV_FILE ];then
-	source $ENV_FILE
-	exl echo "Testing AWS CLI..."
-	aws s3 ls $OUTBUCKET | head -20
-	echo checkpoint1 > checkpoint1.txt
-	aws s3 cp checkpoint1.txt $WDL_URL
-fi
+#if [ -e $ENV_FILE ];then
+
+source $ENV_FILE
+exl echo "Testing AWS CLI..."
+aws s3 ls $OUTBUCKET | head -20
+echo checkpoint1 > checkpoint1.txt
+aws s3 cp checkpoint1.txt $WDL_URL
+exl cat $ENV_FILE
+exl echo "ENVS END"
+#fi
 
 
-
-touch $LOGFILE 
+touch $LOGFILE
 
 exl date  ## start logging
 
