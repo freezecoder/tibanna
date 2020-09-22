@@ -120,6 +120,11 @@ send_log_regularly(){
 send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: send_log (no argument)
 
 
+pip install watchtower #for logging
+pip install pynamodb #for interacting with dynamodb in python
+pip install awscli
+
+
 ### start with a log under the home directory for ubuntu. Later this will be moved to the output directory, once the ebs is mounted.
 LOGFILE=$LOGFILE1
 cd /home/ubuntu/
@@ -214,9 +219,6 @@ send_log
 
 ### download cwl from github or any other url.
 #pip install boto3
-pip install watchtower #for logging
-pip install pynamodb #for interacting with dynamodb in python
-
 
 exl ./download_workflow.py
 
