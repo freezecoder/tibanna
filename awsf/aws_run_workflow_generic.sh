@@ -91,6 +91,11 @@ fi
 # set profile
 echo -ne "$ACCESS_KEY\n$SECRET_KEY\n$REGION\njson" | aws configure --profile user1
 
+#set python path
+export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
+export PATH=/home/ubuntu/.local/bin:$PATH
+
+
 # first create an output bucket/directory
 touch $JOBID.job_started
 aws s3 cp $JOBID.job_started s3://$LOGBUCKET/$JOBID.job_started
@@ -119,8 +124,6 @@ send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: 
 LOGFILE=$LOGFILE1
 cd /home/ubuntu/
 #pip install awscli
-export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
-export PATH=/home/ubuntu/.local/bin:$PATH
 exl echo " aws cli PATH Updated"
 exl echo "Adjusted Python path libs"
 
@@ -220,7 +223,7 @@ exl ./download_workflow.py
 # set up cronjojb for cloudwatch metrics for memory, disk space and CPU utilization
 cwd0=$(pwd)
 cd ~
-apt-get update
+apt-get update -y
 apt-get install -y unzip libwww-perl libdatetime-perl
 curl https://aws-cloudwatch.s3.amazonaws.com/downloads/CloudWatchMonitoringScripts-1.2.2.zip -O
 unzip CloudWatchMonitoringScripts-1.2.2.zip && rm CloudWatchMonitoringScripts-1.2.2.zip && cd aws-scripts-mon
@@ -246,15 +249,15 @@ exl ls
 send_log 
 
 
-#if [ -e $ENV_FILE ];then
-#source $ENV_FILE
-#exl echo "Testing AWS CLI..."
-#aws s3 ls $OUTBUCKET | head -20
+if [ -e $ENV_FILE ];then
+source $ENV_FILE
+exl echo "Testing AWS CLI..."
+aws s3 ls $OUTBUCKET | head -20
 #echo checkpoint1 > checkpoint1.txt
 #aws s3 cp checkpoint1.txt $WDL_URL
 #exl cat $ENV_FILE
 #exl echo "ENVS END"
-#fi
+fi
 
 
 $postrunpy  -cmd message -message "Mounting input buckets"
