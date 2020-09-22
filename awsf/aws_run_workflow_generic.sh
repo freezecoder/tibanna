@@ -101,7 +101,7 @@ exlj(){ $@ >> $LOGJSONFILE 2>> $LOGFILE; ERRCODE=$?; cat $LOGJSONFILE >> $LOGFIL
 exle(){ $@ >> /dev/null 2>> $LOGFILE; ERRCODE=$?; STATUS+=,$ERRCODE; if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi; } ## usage: exl command  ## ERRCODE has the error code for the command. if something is wrong and if LOGBUCKET has already been defined, send error to s3. This one eats stdout. Useful for downloading/uploading files to/from s3, because it writes progress to stdout.
 
 
-# function that sends log to s3 (it requires LOGBUCKET to be defined, which is done by sourcing $ENV_FILE.)
+# function that sends log to s3 (it requires LOGBUCKET to be defined, which is done by sourcing ENV FILE )
 send_log(){  aws s3 cp $LOGFILE s3://$LOGBUCKET; }  ## usage: send_log (no argument)
 send_log_regularly(){  
     watch -n 60 "top -b | head -15 >> $LOGFILE; \
@@ -124,17 +124,9 @@ export PATH=/home/ubuntu/.local/bin:$PATH
 exl echo " aws cli PATH Updated"
 exl echo "Adjusted Python path libs"
 
-#if [ -e $ENV_FILE ];then
-
-source $ENV_FILE
-exl echo "Testing AWS CLI..."
-aws s3 ls $OUTBUCKET | head -20
-echo checkpoint1 > checkpoint1.txt
-aws s3 cp checkpoint1.txt $WDL_URL
-exl cat $ENV_FILE
-exl echo "ENVS END"
-#fi
-
+echo "Current Path" 
+exl pwd
+exl ls -ltrh
 
 touch $LOGFILE
 
@@ -142,8 +134,7 @@ exl date  ## start logging
 
 exl echo $PATH
 
-exl echo "AWS CLI Upgraded"
-exl aws --version
+aws --version
 
 
 ### sshd configure for password recognition
@@ -253,6 +244,17 @@ exle source $DOWNLOAD_COMMAND_FILE
 exl date
 exl ls
 send_log 
+
+
+#if [ -e $ENV_FILE ];then
+#source $ENV_FILE
+#exl echo "Testing AWS CLI..."
+#aws s3 ls $OUTBUCKET | head -20
+#echo checkpoint1 > checkpoint1.txt
+#aws s3 cp checkpoint1.txt $WDL_URL
+#exl cat $ENV_FILE
+#exl echo "ENVS END"
+#fi
 
 
 $postrunpy  -cmd message -message "Mounting input buckets"
