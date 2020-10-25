@@ -28,18 +28,25 @@ JOBTBL="bgm-jobs"
 LOG_GROUP="zeegenomics"
 LOG_STREAM="defaultstream"
 JOBID="somejobid"
-OUTBUCKET="somebucket"
+OUTBUCKET="bgtibanna"
 
 #acquire the log details from env. variables
 try:
 	LOG_GROUP=os.environ["LOG_GROUP"]
 	LOG_STREAM=os.environ["LOG_STREAM"]
-	JOBID=os.environ["JOBID"]
 except Exception as e:
 	print("Sorry: did not find env variables LOG_GROUP, LOG_STREAM and JOBID")
 	print(str(e))
 	pass
 
+#Add job id 
+try:
+	JOBID=os.environ["JOBID"]
+except:
+	print("Could not find JOBID env var")
+	pass
+
+#Add BUCKET NAME
 try:
 	BUCKETNAME=os.environ["OUTBUCKET"]
 except:
@@ -81,6 +88,21 @@ def make_logger(name=LOG_GROUP,stream=LOG_STREAM):
     logger.addHandler(watchtower.CloudWatchLogHandler(log_group=name,stream_name=stream,boto3_session=session))
   return(logger)
 
+
+""" Update the job table with instance Id  """
+def update_instanceid(jobid=JOBID,tblname=JOBTBL,col='instanceid',value='i-xxxxxxxxxxxxx'):
+    expr="set "+str(col)+"= :r"
+    table = boto3.resource('dynamodb',region_name=region).Table(tblname)
+    response = table.update_item(
+        Key={
+            'jobid': jobid,
+        },
+        UpdateExpression=expr,
+        ExpressionAttributeValues={
+            ':r': value,
+        },
+        ReturnValues="UPDATED_NEW"
+    )
 
 
 """ Update the job table  """
@@ -135,10 +157,10 @@ def add_cloud_from_s3(bucket=BUCKETNAME,key="somekey",jobid="somejobid",suffix=N
     print("Adding Data from cloud to db table")
     s3 = boto3.resource('s3')
     bucketobj = s3.Bucket(bucket)
-    print("Fetching files from s3://+"+str(bucket)+"/"+str(key))
+    print("Fetching files from s3://"+str(bucket)+"/"+str(key))
     try:
       for obj in bucketobj.objects.filter(Prefix=key):
-        print("S3:  Adding "+ bucket + " " + str(obj.key) + " to " + jobid + " to bgm-ofiles dynamodb")
+        print("S3:  Adding "+ bucket + " " + str(obj.key) + " to " + jobid + " to bgm-ofiles files database")
         of=Bgmofiles(obj.key)
         of.bucket=bucket
         of.jobid=jobid
@@ -180,11 +202,13 @@ if __name__ == "__main__":
   parser = argparse.ArgumentParser(description="")
   parser.add_argument("-cmd", help="Task to run. message,touch,status,addfiles",default="message",required=True)
   parser.add_argument("-message", help="Message text",required=False,default="Hi there")
-  parser.add_argument("-status", help="Message text",required=False,default="running")
+  parser.add_argument("-status", help="task to perform (message|touch|status|instance)",required=False,default="running")
+  parser.add_argument("-instance", help="Instance",required=False,default="ix2")
   args = parser.parse_args()
   cmd=args.cmd
   status=args.status
   message=args.message
+  instance=args.instance
   logger=make_logger()
   if cmd=="message":
     print("sending message: "+ str(message))
@@ -198,9 +222,17 @@ if __name__ == "__main__":
     print("Setting job status to "+status)
     set_job(JOBID,status)
     update_jobtime(JOBID)
+  elif cmd=="instance":
+    logger.info("Setting job "+str(JOBID)+" instance id  to "+ instance)
+    update_instanceid(jobid=JOBID,value=instance)
   elif cmd=="addfiles":
-    print("Add files (not implemented yet")
-    
+    print("addfiles mode:")
+    print("Adding S3 Output files - if they exist ")
+    k=str(JOBID)+".workflow"
+    print(k)
+    add_cloud_from_s3(bucket=BUCKETNAME,key=k,jobid=JOBID)
+
+   
     
     
     

@@ -9,6 +9,7 @@ export ACCESS_KEY=
 export SECRET_KEY=
 export REGION=
 export SINGULARITY_OPTION=
+export TIBANNA_VERSION=
 
 printHelpAndExit() {
     echo "Usage: ${0##*/} -i JOBID [-m SHUTDOWN_MIN] -j JSON_BUCKET_NAME -l LOGBUCKET [-u SCRIPTS_URL] [-p PASSWORD] [-a ACCESS_KEY] [-s SECRET_KEY] [-r REGION] [-g]"
@@ -23,9 +24,10 @@ printHelpAndExit() {
     echo "-s SECRET_KEY : secret key for certian s3 bucket access (if not set, use IAM permission only)"
     echo "-r REGION : region for the profile set for certain s3 bucket access (if not set, use IAM permission only)"
     echo "-g : use singularity"
+    echo "-V TIBANNA_VERSION : tibanna version (used in the run_task lambda that launched this instance)"
     exit "$1"
 }
-while getopts "i:m:j:l:L:u:p:a:s:r:g" opt; do
+while getopts "i:m:j:l:L:u:p:a:s:r:gV:" opt; do
     case $opt in
         i) export JOBID=$OPTARG;;
         m) export SHUTDOWN_MIN=$OPTARG;;  # Possibly user can specify SHUTDOWN_MIN to hold it for a while for debugging.
@@ -38,6 +40,7 @@ while getopts "i:m:j:l:L:u:p:a:s:r:g" opt; do
         s) export SECRET_KEY=$OPTARG;;  # secret key for certian s3 bucket access
         r) export REGION=$OPTARG;;  # region for the profile set for certian s3 bucket access
         g) export SINGULARITY_OPTION=--singularity;;  # use singularity
+        V) export TIBANNA_VERSION=$OPTARG;;  # version of tibanna used in the run_task lambda that launched this instance
         h) printHelpAndExit 0;;
         [?]) printHelpAndExit 1;;
         esac
@@ -62,6 +65,10 @@ export LOGJSONFILE=$LOCAL_OUTDIR/$JOBID.log.json
 export STATUS=0
 export ERRFILE=$LOCAL_OUTDIR/$JOBID.error  # if this is found on s3, that means something went wrong.
 export INSTANCE_ID=$(ec2-metadata -i|cut -d' ' -f2)
+export INSTANCE_REGION=$(ec2metadata --availability-zone | sed 's/[a-z]$//')
+export AWS_ACCOUNT_ID=$(aws sts get-caller-identity| grep Account | sed 's/[^0-9]//g')
+
+#echo `curl http://169.254.169.254/latest/meta-data/instance-id`
 
 #define cloudwatch log group for messaging to this job
 export LOG_STREAM="biodocker_"$JOBID"_`hostname`"
@@ -122,19 +129,19 @@ send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: 
 
 pip install watchtower #for logging
 pip install pynamodb #for interacting with dynamodb in python
-pip install awscli
 
 
 ### start with a log under the home directory for ubuntu. Later this will be moved to the output directory, once the ebs is mounted.
 LOGFILE=$LOGFILE1
 cd /home/ubuntu/
-#pip install awscli
-exl echo " aws cli PATH Updated"
-exl echo "Adjusted Python path libs"
 
 echo "Current Path" 
 exl pwd
 exl ls -ltrh
+
+exl echo $INSTANCE_ID
+
+send_log
 
 touch $LOGFILE
 
@@ -172,9 +179,12 @@ $postrunpy  -cmd message -message "### Cloud Job Beginning ###"
 
 $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 
-export MAXHOURS=32 #max time to run the instance before shutting it down
+export MAXHOURS=34 #max time to run the instance before shutting it down
 echo sudo shutdown -h now | at now + $MAXHOURS hours
 
+exl "Updating instance id"
+$postrunpy   -cmd instance -instance $INSTANCE_ID
+send_log
 
 exl echo $JSON_BUCKET_NAME
 exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
@@ -220,7 +230,14 @@ send_log
 ### download cwl from github or any other url.
 #pip install boto3
 
+# install boto3, awscli version upgrade
+exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
+
+exl "Installed deps for AWS .."
+
 exl ./download_workflow.py
+
+exl "Workflow downloaded"
 
 # set up cronjojb for cloudwatch metrics for memory, disk space and CPU utilization
 cwd0=$(pwd)
@@ -240,6 +257,12 @@ exl curl -O -L http://bit.ly/goofys-latest
 exl chmod +x goofys-latest
 exl echo "user_allow_other" >> /etc/fuse.conf
 export GOOFYS_COMMAND='./goofys-latest -o allow_other -o nonempty'
+
+if [[ ! -z "$TIBANNA_VERSION" && "$TIBANNA_VERSION" > '0.18' ]]; then
+  pip install awscli -U;
+  #exl docker login --username AWS --password $(aws ecr get-login-password --region $INSTANCE_REGION) $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com;
+fi
+
 
 ### download data & reference files from s3
 exl echo "DOWNLOADING INPUTS.."
@@ -304,8 +327,9 @@ HERE
      sed -i  "s/bioinfo_docker/biodocker_$JOBID/"  /home/ubuntu/cromwell.conf
     
     $postrunpy  -cmd message -message "Entering Docker logging space"
-
-    ( echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json ) > /home/ubuntu/runCromwellz.cmd.sh
+   export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
+    #Make a backup script
+    ( echo export JOBID=$JOBID;echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json; echo aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/ ) > /home/ubuntu/runCromwellz.cmd.sh
     exl java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
     
     $postrunpy  -cmd message -message "Cromwell Execution done"
@@ -333,8 +357,7 @@ then
   aws s3 cp $CONTAINER_IMAGE $SCRIPTNAME
   exl echo "running bash $SCRIPTNAME  as rawbash" >> $LOGFILE
 
-  $postrunpy -cmd status -status "running"
-
+  $postrunpy -cmd status -status "running-shell"
 
   bash $SCRIPTNAME  2>&1 | tee -a $LOGFILE
   ERRCODE=$?; STATUS+=,$ERRCODE;
@@ -347,7 +370,10 @@ then
 
   export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
   aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/
-
+  exl echo Files synced to S3
+  
+  $postrunpy  -cmd addfiles
+  exl echo Files added to database for $JOBID
  
   LOGJSONFILE='-'  # no file
   exl echo "running Bash $SCRIPTNAME  completed " >> $LOGFILE
@@ -410,7 +436,10 @@ if [[ $LANGUAGE == 'wdl' ]];then
 	$postrunpy -cmd message -message  "File sync to S3 complete to $WDL_URL"
 	echo "`date` S3 upload done" >> $LOGFILE
   	send_log
- 
+  	$postrunpy  -cmd addfiles
+	exl echo "`date` Files sync'd to dynamodb" 
+
+
 	$postrunpy -cmd message -message "running-postcleanup"
 	aws s3api  list-objects-v2 --prefix  $JOBID.workflow  --bucket $s3buck > listing.txt
 	aws s3  cp listing.txt  s3://$s3buck/$JOBID.outfiles
@@ -433,8 +462,12 @@ if [[ $LANGUAGE == 'wdl' ]];then
   	echo "`date` success file $JOBID.success uploaded" >> $LOGFILE
   	send_log
   
+	 curl http://169.254.169.254/latest/meta-data/instance-id >> $LOGFILE
+	send_log
+
 
 fi
+
 
 $postrunpy  -cmd message -message "Running AWS update_run_json py"
 
