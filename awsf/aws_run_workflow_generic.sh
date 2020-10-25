@@ -166,6 +166,8 @@ exl wget $SCRIPTS_URL/aws_update_run_json.py
 exl wget $SCRIPTS_URL/aws_upload_output_update_json.py
 exl wget $SCRIPTS_URL/download_workflow.py
 exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
+wget $SCRIPTS_URL/aws_istat.sh -O /home/ubuntu/aws_istat.sh
+
 
 # install boto3, awscli version upgrade
 exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
@@ -250,6 +252,11 @@ echo "*/1 * * * * ~/aws-scripts-mon/mon-put-instance-data.pl --disk-space-util -
 echo "*/1 * * * * top -b | head -15 >> $LOGFILE; du -h $LOCAL_INPUT_DIR/ >> $LOGFILE; du -h $LOCAL_WF_TMPDIR*/ >> $LOGFILE; du -h $LOCAL_OUTDIR/ >> $LOGFILE; aws s3 cp $LOGFILE s3://$LOGBUCKET &>/dev/null" >> cloudwatch.jobs
 cat cloudwatch.jobs | crontab -
 cd $cwd0
+
+#Log for EC2 interruption: we want to record this in the log file
+bash /home/ubuntu/aws_istat.sh $LOGFILE s3://$LOGBUCKET/$JOBID.term  &
+exl echo Enabled EC2 interruption checking
+
 
 ### prepare for file mounting
 exl curl -O -L http://bit.ly/goofys-latest
