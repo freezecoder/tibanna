@@ -191,7 +191,7 @@ exl chmod -R +x .
 exl ./aws_decode_run_json.py $RUN_JSON_FILE_NAME
 
 #Add docker logging info
-echo "DOCKER LOG INFO: awslogs get $LOG_GROUP $LOG_STREAM" >> $LOGFILE
+echo "DOCKER LOG INFO: awslogs get -s2d --timestamp  $LOG_GROUP $LOG_STREAM" >> $LOGFILE
 send_log
 
 exl echo "Updating instance id"
