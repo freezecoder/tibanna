@@ -139,17 +139,9 @@ exl pwd
 exl ls -ltrh
 
 #exl echo $INSTANCE_ID
-
-send_log
-
 touch $LOGFILE
-
 exl date  ## start logging
-
 exl echo $PATH
-
-aws --version
-
 
 ### sshd configure for password recognition
 echo -ne "$PASSWORD\n$PASSWORD\n" | passwd ubuntu
@@ -175,7 +167,12 @@ exl wget $SCRIPTS_URL/aws_upload_output_update_json.py
 exl wget $SCRIPTS_URL/download_workflow.py
 exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
 
+# install boto3, awscli version upgrade
+exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
 export postrunpy="`pwd`/aws_postrun.py"
+aws --version
+
+
 $postrunpy  -cmd message -message "### Cloud Job Beginning ###"
 
 $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
@@ -183,8 +180,9 @@ $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 export MAXHOURS=34 #max time to run the instance before shutting it down
 echo sudo shutdown -h now | at now + $MAXHOURS hours
 
+exl echo "Json BUCKET=$JSON_BUCKET_NAME"
+exl echo "aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME ."
 
-exl echo $JSON_BUCKET_NAME
 exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
 exl chown -R ubuntu .
 exl chmod -R +x .
@@ -231,11 +229,9 @@ LOGFILE=$LOGFILE2
 send_log
 
 ### download cwl from github or any other url.
-#pip install boto3
 
 # install boto3, awscli version upgrade
 exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
-
 exl echo "Installed deps for AWS .."
 
 exl ./download_workflow.py
