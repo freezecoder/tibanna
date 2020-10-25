@@ -10,7 +10,7 @@ export SECRET_KEY=
 export REGION=
 export SINGULARITY_OPTION=
 export TIBANNA_VERSION=
-
+export JSON_BUCKET_NAME="bgtibanna" #our default bucket
 
 
 printHelpAndExit() {
@@ -66,11 +66,10 @@ export LOGFILE2=$LOCAL_OUTDIR/$JOBID.log
 export LOGJSONFILE=$LOCAL_OUTDIR/$JOBID.log.json
 export STATUS=0
 export ERRFILE=$LOCAL_OUTDIR/$JOBID.error  # if this is found on s3, that means something went wrong.
-export INSTANCE_ID=$(ec2-metadata -i|cut -d' ' -f2)
+export INSTANCE_ID=$(ec2metadata --instance-id |cut -d' ' -f2)
 export INSTANCE_REGION=$(ec2metadata --availability-zone | sed 's/[a-z]$//')
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity| grep Account | sed 's/[^0-9]//g')
 
-#echo `curl http://169.254.169.254/latest/meta-data/instance-id`
 
 #define cloudwatch log group for messaging to this job
 export LOG_STREAM="biodocker_"$JOBID"_`hostname`"
@@ -184,9 +183,6 @@ $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 export MAXHOURS=34 #max time to run the instance before shutting it down
 echo sudo shutdown -h now | at now + $MAXHOURS hours
 
-exl echo "Updating instance id"
-$postrunpy   -cmd instance -instance $INSTANCE_ID
-send_log
 
 exl echo $JSON_BUCKET_NAME
 exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
@@ -194,9 +190,14 @@ exl chown -R ubuntu .
 exl chmod -R +x .
 exl ./aws_decode_run_json.py $RUN_JSON_FILE_NAME
 
+exl echo "Updating instance id"
+$postrunpy   -cmd instance -instance $INSTANCE_ID
+send_log
+
 if [ -e $ENV_FILE ];then
 	source $ENV_FILE
 fi
+
 
 ###  mount the EBS volume to the EBS_DIR
 exl lsblk $TMPLOGFILE
@@ -235,7 +236,7 @@ send_log
 # install boto3, awscli version upgrade
 exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
 
-exl "Installed deps for AWS .."
+exl echo "Installed deps for AWS .."
 
 exl ./download_workflow.py
 
