@@ -11,6 +11,8 @@ export REGION=
 export SINGULARITY_OPTION=
 export TIBANNA_VERSION=
 
+
+
 printHelpAndExit() {
     echo "Usage: ${0##*/} -i JOBID [-m SHUTDOWN_MIN] -j JSON_BUCKET_NAME -l LOGBUCKET [-u SCRIPTS_URL] [-p PASSWORD] [-a ACCESS_KEY] [-s SECRET_KEY] [-r REGION] [-g]"
     echo "-i JOBID : awsem job id (required)"
@@ -78,6 +80,8 @@ echo export LOG_STREAM="biodocker_"$JOBID"_`hostname`" > ~/logger.env
 echo export LOG_GROUP="clouddockerjobs" >>  ~/logger.env
 
 
+#Exammple run: bash aws_run_workflow_generic.sh -j $JOBID -j $JSON_BUCKET_NAME -L wdl -l bgtibanna -V 0.18
+
 if [[ $LANGUAGE == 'wdl' ]]
 then
   echo "`date` Running WDL Pipeline"
@@ -97,10 +101,6 @@ fi
 
 # set profile
 echo -ne "$ACCESS_KEY\n$SECRET_KEY\n$REGION\njson" | aws configure --profile user1
-
-#set python path
-#export PYTHONPATH=/home/ubuntu/.local/lib/python2.7/site-packages/
-#export PATH=/home/ubuntu/.local/bin:$PATH
 
 
 # first create an output bucket/directory
@@ -139,7 +139,7 @@ echo "Current Path"
 exl pwd
 exl ls -ltrh
 
-exl echo $INSTANCE_ID
+#exl echo $INSTANCE_ID
 
 send_log
 
@@ -153,9 +153,11 @@ aws --version
 
 
 ### sshd configure for password recognition
--echo -ne "$PASSWORD\n$PASSWORD\n" | passwd ubuntu
--sed -i 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config
--exl service ssh restart
+echo -ne "$PASSWORD\n$PASSWORD\n" | passwd ubuntu
+sed 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config | sed 's/#PasswordAuthentication no/PasswordAuthentication yes/g' > tmpp
+mv tmpp /etc/ssh/sshd_config
+
+exl service ssh restart
 
 ### sshd configure for password recognition
 if [ ! -z $PASSWORD ]; then
@@ -182,7 +184,7 @@ $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 export MAXHOURS=34 #max time to run the instance before shutting it down
 echo sudo shutdown -h now | at now + $MAXHOURS hours
 
-exl "Updating instance id"
+exl echo "Updating instance id"
 $postrunpy   -cmd instance -instance $INSTANCE_ID
 send_log
 
@@ -510,8 +512,8 @@ if [[ $LANGUAGE == 'wdl' ]]
 then
   cd $LOCAL_WFDIR
   find . -type f -name 'stdout' -or -name 'stderr' -or -name 'script' -or \
--name '*.qc' -or -name '*.txt' -or -name '*.log' -or -name '*.png' -or -name '*.pdf' \
-| xargs tar -zcvf debug.tar.gz
+	-name '*.qc' -or -name '*.txt' -or -name '*.log' -or -name '*.png' -or -name '*.pdf' \
+	| xargs tar -zcvf debug.tar.gz
   aws s3 cp debug.tar.gz s3://$LOGBUCKET/$JOBID.debug.tar.gz
 fi
 
