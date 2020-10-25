@@ -238,7 +238,7 @@ exl echo "Installed deps for AWS .."
 
 exl ./download_workflow.py
 
-exl "Workflow downloaded"
+exl echo "Workflow downloaded"
 
 # set up cronjojb for cloudwatch metrics for memory, disk space and CPU utilization
 cwd0=$(pwd)
