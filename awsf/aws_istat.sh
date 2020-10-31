@@ -3,6 +3,9 @@
 
 LOGFILE=${1:-"logfile.txt"}
 CLOUDFILE=${2:-"s3://bgtibanna/somejob.lost"}
+LOGBUCKET=${3:-"bgtibanna"}
+
+send_log(){  aws s3 cp $LOGFILE s3://$LOGBUCKET; }  ## usage: send_log (no argument)
 
 export INSTANCE_ID=$(ec2metadata --instance-id |cut -d' ' -f2)
 export INSTANCE_REGION=$(ec2metadata --availability-zone | sed 's/[a-z]$//')
@@ -18,9 +21,10 @@ while sleep 10; do
         TOKEN=`curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 30"`
     elif [[ "$HTTP_CODE" -eq 200 ]] ; then
         # Insert Your Code to Handle Interruption Here
-	echo WARNING Instance is being terminated by AWS Spot |tee -a $LOGFILE
-	echo WARNING Instance will be lostt |tee -a $LOGFILE
+	echo "WARNING `date` Instance is being terminated by AWS Spot" |tee -a $LOGFILE
+	echo WARNING Instance $INSTANCE_ID  will be lostt |tee -a $LOGFILE
 	echo $INSTANCE_ID > c.lost;aws s3 cp c.lost $CLOUDFILE	
+	send_log
     else
         echo 'Instance is alive and well' > instance.notice
     fi

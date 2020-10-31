@@ -166,17 +166,17 @@ exl wget $SCRIPTS_URL/aws_update_run_json.py
 exl wget $SCRIPTS_URL/aws_upload_output_update_json.py
 exl wget $SCRIPTS_URL/download_workflow.py
 exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
+#Install python patch script for watchtower
+wget $SCRIPTS_URL/wtower_patch.py -O /usr/local/lib/python2.7/dist-packages/watchtower/__init__.py
 wget $SCRIPTS_URL/aws_istat.sh -O /home/ubuntu/aws_istat.sh
-
 
 # install boto3, awscli version upgrade
 exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
+
 export postrunpy="`pwd`/aws_postrun.py"
 aws --version
-
-
+$postrunpy  -cmd message -message "Job init"
 $postrunpy  -cmd message -message "### Cloud Job Beginning ###"
-
 $postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
 
 export MAXHOURS=34 #max time to run the instance before shutting it down
@@ -191,7 +191,7 @@ exl chmod -R +x .
 exl ./aws_decode_run_json.py $RUN_JSON_FILE_NAME
 
 #Add docker logging info
-echo "DOCKER LOG INFO: awslogs get -s2d --timestamp  $LOG_GROUP $LOG_STREAM" >> $LOGFILE
+echo "DOCKER LOG INFO $JOBID : awslogs get -s2d --timestamp  $LOG_GROUP $LOG_STREAM" >> $LOGFILE
 send_log
 
 exl echo "Updating instance id"
@@ -240,6 +240,7 @@ send_log
 exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
 exl echo "Installed deps for AWS .."
 
+$postrunpy -cmd status -status "downloading-workflow"
 exl ./download_workflow.py
 
 exl echo "Workflow downloaded"
@@ -258,7 +259,7 @@ cat cloudwatch.jobs | crontab -
 cd $cwd0
 
 #Log for EC2 interruption: we want to record this in the log file
-bash /home/ubuntu/aws_istat.sh $LOGFILE s3://$LOGBUCKET/$JOBID.term  &
+bash /home/ubuntu/aws_istat.sh $LOGFILE s3://$LOGBUCKET/$JOBID.term  $LOGBUCKET &
 exl echo Enabled EC2 interruption checking
 
 
@@ -274,15 +275,17 @@ if [[ ! -z "$TIBANNA_VERSION" && "$TIBANNA_VERSION" > '0.18' ]]; then
 fi
 
 
+$postrunpy -cmd status -status "downloading-inputs"
 ### download data & reference files from s3
 exl echo "DOWNLOADING INPUTS.."
 exl cat $DOWNLOAD_COMMAND_FILE
 exl date 
 exle source $DOWNLOAD_COMMAND_FILE 
 exl date
-exl ls
+exl ls -ltrh
+exl df -h
+exl echo "INPUTS HAVE COMPLETELY DOWNLOADED"
 send_log 
-
 
 if [ -e $ENV_FILE ];then
 source $ENV_FILE
@@ -320,8 +323,6 @@ mkdir -p $LOCAL_WF_TMPDIR
 #send_log_regularly &
 
 
-
-
 if [[ $LANGUAGE == 'wdl' ]]
 then
 #Make cromwell option file
@@ -340,11 +341,17 @@ HERE
    export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
     #Make a backup script
     ( echo export JOBID=$JOBID;echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json; echo aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/ ) > /home/ubuntu/runCromwellz.cmd.sh
-    exl java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json
-    
+	
+     #Cromwell command or fail with message and sync the cromwell-executions folder
+     java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar \
+	run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json >> $LOGFILE 2>> $LOGFILE \
+	|| ( $postrunpy  -cmd message -message "Cromwell Failed,backing up outputs";  aws s3 sync --no-follow-symlinks --quiet /data1/wdl/  s3://$s3buck/$JOBID.workflow/ ; echo  "Cromwell_Failed: $JOBID $INSTANCE_ID " >> $LOGFILE ;$postrunpy -cmd status -status "failed" )
+    send_log
+
     $postrunpy  -cmd message -message "Cromwell Execution done"
     $postrunpy -cmd status -status "syncing-outputs"
     
+    send_log
   
 elif [[ $LANGUAGE == 'snakemake' ]]
 then
@@ -377,6 +384,7 @@ then
   else
 	 $postrunpy -cmd status -status "completed" 
    fi
+  send_log
 
   export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
   aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/
