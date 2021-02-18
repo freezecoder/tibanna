@@ -127,7 +127,7 @@ send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: 
 
 
 pip install watchtower #for logging
-pip install pynamodb #for interacting with dynamodb in python
+pip install pynamodb==4.3.3  #for interacting with dynamodb in python
 
 
 ### start with a log under the home directory for ubuntu. Later this will be moved to the output directory, once the ebs is mounted.
