@@ -447,8 +447,11 @@ if [[ $LANGUAGE == 'wdl' ]];then
   	send_log
 
         $postrunpy  -cmd message -message "Uploading outputs to S3..."
-  
+
+  	echo "Local outdir is $LOCAL_OUTDIR"
+	
 	export s3buck=`echo $WDL_URL |perl -pe 's@s3://@@;s/\/.+//'`
+	echo aws s3 sync $LOCAL_OUTDIR/ $WDL_URL
 	aws s3 sync $LOCAL_OUTDIR/ $WDL_URL 
 	#copy file listing over
 	$postrunpy -cmd message -message  "File sync to S3 complete to $WDL_URL"
