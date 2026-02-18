@@ -10,7 +10,7 @@ export SECRET_KEY=
 export REGION=
 export SINGULARITY_OPTION=
 export TIBANNA_VERSION=
-export JSON_BUCKET_NAME="bgtibanna" #our default bucket
+export JSON_BUCKET_NAME="ziatibbana" #our default bucket
 
 
 printHelpAndExit() {
@@ -348,6 +348,9 @@ HERE
 	|| ( $postrunpy  -cmd message -message "Cromwell Failed,backing up outputs";  aws s3 sync --no-follow-symlinks --quiet /data1/wdl/  s3://$s3buck/$JOBID.workflow/ ; echo  "Cromwell_Failed: $JOBID $INSTANCE_ID " >> $LOGFILE ;$postrunpy -cmd status -status "failed" )
     send_log
 
+  	exl echo "Cromwell run done"
+	exl echo "aws s3 sync --no-follow-symlinks --quiet /data1/wdl/  s3://$s3buck/$JOBID.workflow/ "
+
     $postrunpy  -cmd message -message "Cromwell Execution done"
     $postrunpy -cmd status -status "syncing-outputs"
     
@@ -386,7 +389,7 @@ then
    fi
   send_log
 
-  export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
+  export s3buck=$OUTBUCKET
   aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/
   exl echo Files synced to S3
   
