@@ -338,7 +338,7 @@ HERE
      sed -i  "s/bioinfo_docker/biodocker_$JOBID/"  /home/ubuntu/cromwell.conf
     
     $postrunpy  -cmd message -message "Entering Docker logging space"
-   export s3buck=`echo $CONTAINER_IMAGE |perl -pe 's@s3://@@;s/\/.+//'`
+   export s3buck=$OUTBUCKET
     #Make a backup script
     ( echo export JOBID=$JOBID;echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json; echo aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/ ) > /home/ubuntu/runCromwellz.cmd.sh
 	
