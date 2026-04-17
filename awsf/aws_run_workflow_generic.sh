@@ -2,7 +2,7 @@
 shopt -s extglob
 export SHUTDOWN_MIN=now
 #export SCRIPTS_URL=https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/
-export SCRIPTS_URL=https://raw.githubusercontent.com/freezecoder/tibanna/master/awsf/
+export SCRIPTS_URL=https://raw.githubusercontent.com/freezecoder/tibanna/test-ecr/awsf/
 export LANGUAGE=cwl_draft3
 export PASSWORD=
 export ACCESS_KEY=
