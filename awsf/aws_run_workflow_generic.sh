@@ -272,7 +272,12 @@ export GOOFYS_COMMAND='./goofys-latest -o allow_other -o nonempty'
 # Always run docker login for ECR (removed TIBANNA_VERSION check)
 if true; then
   pip install awscli -U;
-  exl docker login --username AWS --password $(aws ecr get-login-password --region $INSTANCE_REGION) $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com;
+  echo "ECR docker login for $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com" >> $LOGFILE
+  aws ecr get-login-password --region $INSTANCE_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com >> $LOGFILE 2>&1
+  ERRCODE=$?
+  STATUS+=,$ERRCODE
+  echo "docker login exit code: $ERRCODE" >> $LOGFILE
+  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi
 fi
 
 
