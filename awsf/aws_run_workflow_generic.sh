@@ -269,7 +269,8 @@ exl chmod +x goofys-latest
 exl echo "user_allow_other" >> /etc/fuse.conf
 export GOOFYS_COMMAND='./goofys-latest -o allow_other -o nonempty'
 
-if [[ ! -z "$TIBANNA_VERSION" && "$TIBANNA_VERSION" > '0.18' ]]; then
+# Always run docker login for ECR (removed TIBANNA_VERSION check)
+if true; then
   pip install awscli -U;
   exl docker login --username AWS --password $(aws ecr get-login-password --region $INSTANCE_REGION) $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com;
 fi
