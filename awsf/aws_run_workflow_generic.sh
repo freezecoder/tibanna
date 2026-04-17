@@ -272,16 +272,10 @@ export GOOFYS_COMMAND='./goofys-latest -o allow_other -o nonempty'
 # Always run docker login for ECR (removed TIBANNA_VERSION check)
 if true; then
   pip install awscli -U;
-  # Pre-pull ECR images into local Docker cache (IAM instance profile has ECR permissions)
-  # No docker login needed — instance profile auth handles ECR
-  if [ ! -z "$CUSTOM_ECR_IMAGES" ]; then
-    echo "Pre-pulling ECR images: $CUSTOM_ECR_IMAGES" >> $LOGFILE
-    for img in $(echo "$CUSTOM_ECR_IMAGES" | tr "," " "); do
-      echo "  docker pull $img" >> $LOGFILE
-      docker pull "$img" >> $LOGFILE 2>&1
-      echo "  exit: $?" >> $LOGFILE
-    done
-  fi
+  # Pre-pull private ECR images (IAM instance profile has ECR pull permissions, no docker login needed)
+  echo "Pre-pulling private ECR images into local Docker cache..." >> $LOGFILE
+  docker pull 424373368332.dkr.ecr.us-east-1.amazonaws.com/fusion-combiner:latest >> $LOGFILE 2>&1
+  echo "Pre-pull exit code: $?" >> $LOGFILE
 fi
 
 
