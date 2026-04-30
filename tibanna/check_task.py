@@ -2,6 +2,7 @@
 import boto3
 import json
 import copy
+import time as time_module
 from .cw_utils import TibannaResource
 from datetime import datetime, timedelta
 from dateutil.tz import tzutc
@@ -23,6 +24,9 @@ from .exceptions import (
 )
 
 RESPONSE_JSON_CONTENT_INCLUSION_LIMIT = 30000  # strictly it is 32,768 but just to be safe.
+
+CLOUDDOCKERJOBS_LOG_GROUP = "clouddockerjobs"
+BGMCLOUDDOCKERS_TABLE = "bgm-jobs"
 
 
 def check_task(input_json):
@@ -52,6 +56,9 @@ class CheckTask(object):
         # check to see ensure this job has started else fail
         if not does_key_exist(bucket_name, job_started):
             raise EC2StartingException("Failed to find jobid %s, ec2 is probably still booting" % jobid)
+
+        # Check if job is actively running via CloudWatch Logs and update bgm-jobs to 'running'
+        self.poll_cloudwatch_and_update_running(jobid, bucket_name, job_success, input_json_copy, public_postrun_json)
     
         # check to see if job has error, report if so
         if does_key_exist(bucket_name, job_error):
@@ -64,7 +71,11 @@ class CheckTask(object):
     
         # check to see if job has completed
         if does_key_exist(bucket_name, job_success):
-            self.handle_postrun_json(bucket_name, jobid, input_json_copy, public_read=public_postrun_json)
+            try:
+                self.handle_postrun_json(bucket_name, jobid, input_json_copy, public_read=public_postrun_json)
+            except Exception as e:
+                # Metrics collection can fail (e.g. no instance_id in test jobs) — job is still complete
+                printlog("handle_postrun_json failed (non-critical): %s" % str(e))
             print("completed successfully")
             return input_json_copy
     
@@ -117,6 +128,115 @@ class CheckTask(object):
     
         # if none of the above
         raise StillRunningException("job %s still running" % jobid)
+
+    def poll_cloudwatch_and_update_running(self, jobid, bucket_name, job_success, input_json_copy, public_postrun_json):
+        """Poll CloudWatch Logs until the job's biodocker log stream shows events,
+        then update bgm-jobs status to 'running'. Retries with exponential backoff.
+
+        Log streams are named: biodocker_{jobid}_ip-{instance_ip}
+        We use filter-log-events on the clouddockerjobs log group to find the stream
+        without needing the instance IP.
+
+        Retries: starts at 30s wait, doubles each attempt up to 120s, max ~4 min total.
+
+        Also checks for .success during polling to handle short-running jobs that
+        complete while the Lambda is waiting on CloudWatch retries.
+        """
+        cw = boto3.client('logs')
+        log_group = CLOUDDOCKERJOBS_LOG_GROUP
+
+        # Exponential backoff: [30, 60, 120, 120, 120, ...] — up to ~330s total wait
+        # Lambda timeout is 300s, so keep total wait under 270s to leave headroom
+        delays = [30, 60, 120, 120, 120]
+        max_total_wait = 270  # seconds
+
+        waited = 0
+        for attempt, delay in enumerate(delays):
+            if waited + delay > max_total_wait:
+                delay = max_total_wait - waited
+            if delay <= 0:
+                break
+
+            printlog("poll_cloudwatch attempt %d: waiting %ds for job %s log events" % (attempt + 1, delay, jobid))
+            time_module.sleep(delay)
+            waited += delay
+
+            try:
+                # Find log streams matching biodocker_{jobid}_*
+                streams_resp = cw.describe_log_streams(
+                    logGroupName=log_group,
+                    logStreamNamePrefix="biodocker_%s" % jobid
+                )
+                matching_streams = [
+                    s for s in streams_resp.get('logStreams', [])
+                    if s['logStreamName'].startswith("biodocker_%s" % jobid)
+                ]
+            except Exception as e:
+                printlog("poll_cloudwatch: describe_log_streams error for job %s: %s" % (jobid, e))
+                continue
+
+            if not matching_streams:
+                printlog("poll_cloudwatch attempt %d: no log stream found yet for job %s" % (attempt + 1, jobid))
+                continue
+
+            # Get the most recent stream (there should only be one per job)
+            stream = max(matching_streams, key=lambda s: s.get('lastIngestionTime', 0))
+            stream_name = stream['logStreamName']
+
+            try:
+                events_resp = cw.get_log_events(
+                    logGroupName=log_group,
+                    logStreamName=stream_name,
+                    limit=1,
+                    startFromHead=False
+                )
+                events = events_resp.get('events', [])
+            except Exception as e:
+                printlog("poll_cloudwatch: get_log_events error for stream %s: %s" % (stream_name, e))
+                continue
+
+            if events:
+                printlog("poll_cloudwatch: stream %s found with %d events — updating bgm-jobs to running" % (stream_name, len(events)))
+                self._update_bgm_jobs_running(jobid)
+                return  # success — job is confirmed running
+
+            printlog("poll_cloudwatch attempt %d: stream %s exists but no events yet" % (attempt + 1, stream_name))
+
+            # Early exit: check if job already completed while we were polling
+            if does_key_exist(bucket_name, job_success):
+                printlog("poll_cloudwatch: .success appeared during polling — handling completion")
+                try:
+                    self.handle_postrun_json(bucket_name, jobid, input_json_copy, public_read=public_postrun_json)
+                except Exception as e:
+                    printlog("handle_postrun_json failed (non-critical): %s" % str(e))
+                print("completed successfully")
+                return input_json_copy
+
+        printlog("poll_cloudwatch: max retries reached for job %s — will retry on next check_task invocation" % jobid)
+
+    def _update_bgm_jobs_running(self, jobid):
+        """Update bgm-jobs status and jstatus to 'running' and set modified to now."""
+        try:
+            now = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.000000Z")
+            dynamodb = boto3.resource('dynamodb')
+            table = dynamodb.Table(BGMCLOUDDOCKERS_TABLE)
+            table.update_item(
+                Key={'jobid': jobid},
+                UpdateExpression="SET #s = :s, #js = :js, #m = :m",
+                ExpressionAttributeNames={
+                    '#s': 'status',
+                    '#js': 'jstatus',
+                    '#m': 'modified'
+                },
+                ExpressionAttributeValues={
+                    ':s': 'running',
+                    ':js': 'running',
+                    ':m': now
+                }
+            )
+            printlog("bgm-jobs updated: jobid=%s status=running modified=%s" % (jobid, now))
+        except Exception as e:
+            printlog("poll_cloudwatch: failed to update bgm-jobs for job %s: %s" % (jobid, e))
 
     def handle_postrun_json(self, bucket_name, jobid, input_json, public_read=False):
         postrunjson = "%s.postrun.json" % jobid
