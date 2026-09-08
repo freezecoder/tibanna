@@ -417,9 +417,9 @@ CONTAINER_RC=$?
 exl echo
 exl echo "## CUSTOM blanket sync: $EBS_DIR/wdl/cromwell-executions/ -> s3://$LOGBUCKET/$JOBID.workflow/ (container rc=$CONTAINER_RC)"
 if [ -z "$S3_ENCRYPT_KEY_ID" ]; then
-  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" >> $LOGFILE 2>> $LOGFILE
+  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --exclude "*/vep_data/*" >> $LOGFILE 2>> $LOGFILE
 else
-  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
+  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --exclude "*/vep_data/*" --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
 fi
 SYNC_RC=$?
 exl echo "## blanket sync rc=$SYNC_RC"
