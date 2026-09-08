@@ -430,7 +430,10 @@ send_log
 ### tolerating awsf3's in-container array crash. A real sync failure -> error.
 ### NOTE: this does not yet distinguish a genuine Cromwell workflow failure from an awsf3-only
 ### crash; add Cromwell-rc/status inspection before using for production pipelines.
-if [ "$SYNC_RC" -eq 0 ]; then
+# aws s3 sync rc: 0 = clean; 2 = some files SKIPPED due to warnings (e.g. broken symlinks that
+# STAR-Fusion leaves pointing at in-container absolute paths) -- the real deliverables still
+# uploaded, so treat 2 as success. rc 1 (a real transfer failure) or anything else = failure.
+if [ "$SYNC_RC" -eq 0 ] || [ "$SYNC_RC" -eq 2 ]; then
   # the in-container awsf3 may have written a <jobid>.error on its Array[File] crash; the
   # blanket sync is our source of truth for output capture, so clear it before signaling success
   aws s3 rm s3://$LOGBUCKET/$JOBID.error >> $LOGFILE 2>> $LOGFILE || true
