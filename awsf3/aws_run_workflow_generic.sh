@@ -386,11 +386,25 @@ done
 send_log
 # will fail here now if docker pull is not successful after multiple attempts
 # pass S3_ENCRYPT_KEY_ID if desired
+
+### === CUSTOM: per-jobid CloudWatch logging for the nested (tool) docker containers ===
+### Make the AWSF container's nested dockerd default to the awslogs driver, so every tool
+### container Cromwell launches streams its stdout/stderr live to CloudWatch log group
+### /genomics/$JOBID (one stream per container). Requires the worker instance role
+### (tibanna_genomics_for_ec2) to allow logs:CreateLogGroup/CreateLogStream/PutLogEvents.
+DOCKER_DAEMON_JSON=/tmp/awsf-daemon.json
+cat > $DOCKER_DAEMON_JSON <<DJSON
+{"log-driver":"awslogs","log-opts":{"awslogs-region":"$INSTANCE_REGION","awslogs-group":"/genomics/$JOBID","awslogs-create-group":"true"}}
+DJSON
+exl echo "## nested-docker awslogs config -> CloudWatch group /genomics/$JOBID"
+DOCKER_LOG_MOUNT="-v $DOCKER_DAEMON_JSON:/etc/docker/daemon.json:ro"
+### === END CUSTOM ===
+
 if [ -z "$S3_ENCRYPT_KEY_ID" ];
 then
-  $CONTAINER_CMD run --privileged --net host -e HOST_HOME=$INSTANCE_HOME -v $INSTANCE_HOME/:$INSTANCE_HOME/:rw -v /mnt/:/mnt/:rw $AWSF_IMAGE run.sh -i $JOBID -l $LOGBUCKET -f $EBS_DEVICE -S $STATUS $SINGULARITY_OPTION_TO_PASS
+  $CONTAINER_CMD run --privileged --net host $DOCKER_LOG_MOUNT -e HOST_HOME=$INSTANCE_HOME -v $INSTANCE_HOME/:$INSTANCE_HOME/:rw -v /mnt/:/mnt/:rw $AWSF_IMAGE run.sh -i $JOBID -l $LOGBUCKET -f $EBS_DEVICE -S $STATUS $SINGULARITY_OPTION_TO_PASS
 else
-  $CONTAINER_CMD run --privileged --net host -e HOST_HOME=$INSTANCE_HOME -v $INSTANCE_HOME/:$INSTANCE_HOME/:rw -v /mnt/:/mnt/:rw $AWSF_IMAGE run.sh -i $JOBID -l $LOGBUCKET -f $EBS_DEVICE -S $STATUS $SINGULARITY_OPTION_TO_PASS -k $S3_ENCRYPT_KEY_ID
+  $CONTAINER_CMD run --privileged --net host $DOCKER_LOG_MOUNT -e HOST_HOME=$INSTANCE_HOME -v $INSTANCE_HOME/:$INSTANCE_HOME/:rw -v /mnt/:/mnt/:rw $AWSF_IMAGE run.sh -i $JOBID -l $LOGBUCKET -f $EBS_DEVICE -S $STATUS $SINGULARITY_OPTION_TO_PASS -k $S3_ENCRYPT_KEY_ID
 fi
 CONTAINER_RC=$?
 
@@ -403,9 +417,9 @@ CONTAINER_RC=$?
 exl echo
 exl echo "## CUSTOM blanket sync: $EBS_DIR/wdl/cromwell-executions/ -> s3://$LOGBUCKET/$JOBID.workflow/ (container rc=$CONTAINER_RC)"
 if [ -z "$S3_ENCRYPT_KEY_ID" ]; then
-  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ >> $LOGFILE 2>> $LOGFILE
+  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" >> $LOGFILE 2>> $LOGFILE
 else
-  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
+  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
 fi
 SYNC_RC=$?
 exl echo "## blanket sync rc=$SYNC_RC"
