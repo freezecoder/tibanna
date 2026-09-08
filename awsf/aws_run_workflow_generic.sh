@@ -1,554 +1,439 @@
 #!/bin/bash
 shopt -s extglob
+export TIBANNA_VERSION=
+export AWSF_IMAGE=
 export SHUTDOWN_MIN=now
-#export SCRIPTS_URL=https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/
-export SCRIPTS_URL=https://raw.githubusercontent.com/freezecoder/tibanna/master/awsf/
-export LANGUAGE=cwl_draft3
 export PASSWORD=
 export ACCESS_KEY=
 export SECRET_KEY=
 export REGION=
-export SINGULARITY_OPTION=
-export TIBANNA_VERSION=
-export JSON_BUCKET_NAME="ziatibbana" #our default bucket
-
+export SINGULARITY_OPTION_TO_PASS=
+export DISABLE_METRICS_COLLECTION=false
+export S3_ENCRYPT_KEY_ID=
 
 printHelpAndExit() {
-    echo "Usage: ${0##*/} -i JOBID [-m SHUTDOWN_MIN] -j JSON_BUCKET_NAME -l LOGBUCKET [-u SCRIPTS_URL] [-p PASSWORD] [-a ACCESS_KEY] [-s SECRET_KEY] [-r REGION] [-g]"
+    echo "Usage: ${0##*/} -i JOBID -l LOGBUCKET -V VERSION -A AWSF_IMAGE [-m SHUTDOWN_MIN] [-p PASSWORD] [-a ACCESS_KEY] [-s SECRET_KEY] [-r REGION] [-g] [-c] [-k S3_ENCRYPT_KEY_ID]"
     echo "-i JOBID : awsem job id (required)"
-    echo "-m SHUTDOWN_MIN : Possibly user can specify SHUTDOWN_MIN to hold it for a while for debugging. (default 'now')"
-    echo "-j JSON_BUCKET_NAME : bucket for sending run.json file. This script gets run.json file from this bucket. e.g.: 4dn-aws-pipeline-run-json (required)"
     echo "-l LOGBUCKET : bucket for sending log file (required)"
-    echo "-L LANGUAGE : workflow language ('cwl_draft3', 'cwl_v1', 'wdl', 'snakemake', or 'shell' or 'rawbash') (default cwl_draft3)"
-    echo "-u SCRIPTS_URL : Tibanna repo url (default: https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/)"
+    echo "-V TIBANNA_VERSION : tibanna version (used in the run_task lambda that launched this instance)"
+    echo "-A AWSF_IMAGE : docker image name for awsf3 (e.g. 4dn-dcic/tibanna-awsf3:1.0.0)"
+    echo "-m SHUTDOWN_MIN : Possibly user can specify SHUTDOWN_MIN to hold it for a while for debugging. (default 'now')"
     echo "-p PASSWORD : Password for ssh connection for user ec2-user (if not set, no password-based ssh)"
     echo "-a ACCESS_KEY : access key for certain s3 bucket access (if not set, use IAM permission only)"
     echo "-s SECRET_KEY : secret key for certian s3 bucket access (if not set, use IAM permission only)"
     echo "-r REGION : region for the profile set for certain s3 bucket access (if not set, use IAM permission only)"
     echo "-g : use singularity"
-    echo "-V TIBANNA_VERSION : tibanna version (used in the run_task lambda that launched this instance)"
+    echo "-c : Metrics collection is disabled if flag is set"
+    echo "-k S3_ENCRYPT_KEY_ID : KMS key to encrypt s3 files with"
     exit "$1"
 }
-while getopts "i:m:j:l:L:u:p:a:s:r:gV:" opt; do
+while getopts "i:m:l:p:a:s:r:gcV:A:k:" opt; do
     case $opt in
         i) export JOBID=$OPTARG;;
-        m) export SHUTDOWN_MIN=$OPTARG;;  # Possibly user can specify SHUTDOWN_MIN to hold it for a while for debugging.
-        j) export JSON_BUCKET_NAME=$OPTARG;;  # bucket for sending run.json file. This script gets run.json file from this bucket. e.g.: 4dn-aws-pipeline-run-json
         l) export LOGBUCKET=$OPTARG;;  # bucket for sending log file
-        L) export LANGUAGE=$OPTARG;;  # workflow language
-        u) export SCRIPTS_URL=$OPTARG;;  # Tibanna repo url (e.g. https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf/)
+        V) export TIBANNA_VERSION=$OPTARG;;  # version of tibanna used in the run_task lambda that launched this instance
+        A) export AWSF_IMAGE=$OPTARG;;  # docker image name for awsf3 (e.g. 4dn-dcic/tibanna-awsf3:1.0.0)
+        m) export SHUTDOWN_MIN=$OPTARG;;  # Possibly user can specify SHUTDOWN_MIN to hold it for a while for debugging.
         p) export PASSWORD=$OPTARG ;;  # Password for ssh connection for user ec2-user
         a) export ACCESS_KEY=$OPTARG;;  # access key for certain s3 bucket access
         s) export SECRET_KEY=$OPTARG;;  # secret key for certian s3 bucket access
         r) export REGION=$OPTARG;;  # region for the profile set for certian s3 bucket access
-        g) export SINGULARITY_OPTION=--singularity;;  # use singularity
-        V) export TIBANNA_VERSION=$OPTARG;;  # version of tibanna used in the run_task lambda that launched this instance
+        g) export SINGULARITY_OPTION_TO_PASS=-g;;  # use singularity
+        c) export DISABLE_METRICS_COLLECTION=true;;  # disable metrics collection
+        k) export S3_ENCRYPT_KEY_ID=$OPTARG;;  # KMS key ID to encrypt s3 files with
         h) printHelpAndExit 0;;
         [?]) printHelpAndExit 1;;
         esac
 done
 
-
-export RUN_JSON_FILE_NAME=$JOBID.run.json
-export POSTRUN_JSON_FILE_NAME=$JOBID.postrun.json
 export EBS_DIR=/data1  ## WARNING: also hardcoded in aws_decode_run_json.py
-export LOCAL_OUTDIR=$EBS_DIR/out  
-export LOCAL_INPUT_DIR=$EBS_DIR/input  ## WARNING: also hardcoded in aws_decode_run_json.py
-export LOCAL_REFERENCE_DIR=$EBS_DIR/reference  ## WARNING: also hardcoded in aws_decode_run_json.py
-export LOCAL_WF_TMPDIR=$EBS_DIR/tmp
-export MD5FILE=$JOBID.md5sum.txt
-export INPUT_YML_FILE=inputs.yml
-export DOWNLOAD_COMMAND_FILE=download_command_list.txt
-export MOUNT_COMMAND_FILE=mount_command_list.txt
-export ENV_FILE=env_command_list.txt
+
+# Locate the docker binary (docker is installed on both the Ubuntu and RHEL AMIs)
+CONTAINER_CMD=$(command -v docker 2>/dev/null)
+# Detect instance user and home directory (ubuntu on Debian/Ubuntu, ec2-user on RHEL)
+INSTANCE_USER=$(getent passwd ubuntu 2>/dev/null | cut -d: -f1)
+[ -z "$INSTANCE_USER" ] && INSTANCE_USER=$(getent passwd ec2-user 2>/dev/null | cut -d: -f1)
+# Fall back to "ubuntu" if neither known user exists. Record the fallback so we can
+# warn once logging is up: on such an image /home/ubuntu likely does not exist and
+# later steps (e.g. chown of $EBS_DIR) will fail with a non-obvious cause.
+INSTANCE_USER_FALLBACK=false
+[ -z "$INSTANCE_USER" ] && { INSTANCE_USER="ubuntu"; INSTANCE_USER_FALLBACK=true; }
+INSTANCE_HOME="/home/$INSTANCE_USER"
+export LOCAL_OUTDIR=$EBS_DIR/out
 export LOGFILE1=templog___  # log before mounting ebs
 export LOGFILE2=$LOCAL_OUTDIR/$JOBID.log
-export LOGJSONFILE=$LOCAL_OUTDIR/$JOBID.log.json
 export STATUS=0
 export ERRFILE=$LOCAL_OUTDIR/$JOBID.error  # if this is found on s3, that means something went wrong.
-export INSTANCE_ID=$(ec2metadata --instance-id |cut -d' ' -f2)
-export INSTANCE_REGION=$(ec2metadata --availability-zone | sed 's/[a-z]$//')
+#IMDSv2 Addition
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+AZ=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/availability-zone)
+export INSTANCE_REGION=${AZ::-1}
 export AWS_ACCOUNT_ID=$(aws sts get-caller-identity| grep Account | sed 's/[^0-9]//g')
 
 
-#define cloudwatch log group for messaging to this job
-export LOG_STREAM="biodocker_"$JOBID"_`hostname`"
-export LOG_GROUP="clouddockerjobs"
-
-echo export LOG_STREAM="biodocker_"$JOBID"_`hostname`" > ~/logger.env
-echo export LOG_GROUP="clouddockerjobs" >>  ~/logger.env
-
-
-#Exammple run: bash aws_run_workflow_generic.sh -j $JOBID -j $JSON_BUCKET_NAME -L wdl -l bgtibanna -V 0.18
-
-if [[ $LANGUAGE == 'wdl' ]]
-then
-  echo "`date` Running WDL Pipeline"
-  export LOCAL_WFDIR=$EBS_DIR/wdl
-elif [[ $LANGUAGE == 'snakemake' ]]
-then
-  export LOCAL_WFDIR=$EBS_DIR/snakemake
-elif [[ $LANGUAGE == 'shell' ]]
-then
-  export LOCAL_WFDIR=$EBS_DIR/shell
-elif [[ $LANGUAGE == 'rawbash' ]]
-then
-  export LOCAL_WFDIR=$EBS_DIR/shell
-else
-  export LOCAL_WFDIR=$EBS_DIR/cwl
-fi
-
-# set profile
-echo -ne "$ACCESS_KEY\n$SECRET_KEY\n$REGION\njson" | aws configure --profile user1
-
-
-# first create an output bucket/directory
-touch $JOBID.job_started
-aws s3 cp $JOBID.job_started s3://$LOGBUCKET/$JOBID.job_started
-
 # function that executes a command and collecting log
-exl(){ $@ >> $LOGFILE 2>> $LOGFILE; ERRCODE=$?; STATUS+=,$ERRCODE; if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi; } ## usage: exl command  ## ERRCODE has the error code for the command. if something is wrong and if LOGBUCKET has already been defined, send error to s3.
-exlj(){ $@ >> $LOGJSONFILE 2>> $LOGFILE; ERRCODE=$?; cat $LOGJSONFILE >> $LOGFILE; STATUS+=,$ERRCODE; if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi; } ## usage: exl command  ## ERRCODE has the error code for the command. if something is wrong and if LOGBUCKET has already been defined, send error to s3. This one separates stdout to json as well.
-exle(){ $@ >> /dev/null 2>> $LOGFILE; ERRCODE=$?; STATUS+=,$ERRCODE; if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi; } ## usage: exl command  ## ERRCODE has the error code for the command. if something is wrong and if LOGBUCKET has already been defined, send error to s3. This one eats stdout. Useful for downloading/uploading files to/from s3, because it writes progress to stdout.
+exl(){ $@ >> $LOGFILE 2>> $LOGFILE; handle_error $?; } ## usage: exl command  ## ERRCODE has the error code for the command. if something is wrong, send error to s3.
+exlo(){ $@ 2>> /dev/null >> $LOGFILE; handle_error $?; } ## usage: exlo command  ## ERRCODE has the error code for the command. if something is wrong, send error to s3. This one eats stderr. Useful for hiding long errors or credentials.
+exl_no_error(){ $@ >> $LOGFILE 2>> $LOGFILE; } ## same as exl but will not exit on error
 
-
-# function that sends log to s3 (it requires LOGBUCKET to be defined, which is done by sourcing ENV FILE )
-send_log(){  aws s3 cp $LOGFILE s3://$LOGBUCKET; }  ## usage: send_log (no argument)
-send_log_regularly(){  
-    watch -n 60 "top -b | head -15 >> $LOGFILE; \
-    du -h $LOCAL_INPUT_DIR/ >> $LOGFILE; \
-    du -h $LOCAL_WF_TMPDIR*/ >> $LOGFILE; \
-    du -h $LOCAL_OUTDIR/ >> $LOGFILE; \
-    aws s3 cp $LOGFILE s3://$LOGBUCKET &>/dev/null";
-}  ## usage: send_log_regularly (no argument)
+# function that sends log to s3 (it requires LOGBUCKET to be defined, which is done by sourcing $ENV_FILE.)
+## usage: send_log (no argument)
+send_log() {
+  if [ -z "$S3_ENCRYPT_KEY_ID" ];
+  then
+    aws s3 cp $LOGFILE s3://$LOGBUCKET &>/dev/null;
+  else
+    aws s3 cp $LOGFILE s3://$LOGBUCKET --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" &>/dev/null;
+  fi
+}
 
 # function that sends error file to s3 to notify something went wrong.
-send_error(){  touch $ERRFILE; aws s3 cp $ERRFILE s3://$LOGBUCKET; }  ## usage: send_log (no argument)
+## usage: send_error (no argument)
+send_error(){
+  touch $ERRFILE;
+  if [ -z "$S3_ENCRYPT_KEY_ID" ];
+  then
+    aws s3 cp $ERRFILE s3://$LOGBUCKET;
+  else
+    aws s3 cp $ERRFILE s3://$LOGBUCKET --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID";
+  fi
+}
 
+# function that sends job_started file to s3, notifying that the job successfully started
+## usage: send_job_started (no argument)
+send_job_started() {
+  touch $JOBID.job_started;
+  if [ -z "$S3_ENCRYPT_KEY_ID" ];
+  then
+    aws s3 cp $JOBID.job_started s3://$LOGBUCKET/$JOBID.job_started
+  else
+    aws s3 cp $JOBID.job_started s3://$LOGBUCKET/$JOBID.job_started --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID";
+  fi
+}
 
-pip install watchtower #for logging
-pip install pynamodb==4.3.3  #for interacting with dynamodb in python
+# function that handles errors - this function calls send_error and send_log
+handle_error() {  ERRCODE=$1; STATUS+=,$ERRCODE; if [ "$ERRCODE" -ne 0 ]; then send_error; send_log; shutdown -h $SHUTDOWN_MIN; fi; }  ## usage: handle_error <error_code>
 
+# used to compare Tibanna version strings
+version() { echo "$@" | awk -F. '{ printf("%d%03d%03d%03d\n", $1,$2,$3,$4); }'; }
 
-### start with a log under the home directory for ubuntu. Later this will be moved to the output directory, once the ebs is mounted.
-LOGFILE=$LOGFILE1
-cd /home/ubuntu/
-
-echo "Current Path" 
-exl pwd
-exl ls -ltrh
-
-#exl echo $INSTANCE_ID
+### start with a log under the home directory for the instance user. Later this will be moved to the output directory, once the ebs is mounted.
+export LOGFILE=$LOGFILE1
+cd $INSTANCE_HOME/
 touch $LOGFILE
-exl date  ## start logging
-exl echo $PATH
+
+
+# make sure log bucket is defined
+if [ -z "$LOGBUCKET" ]; then
+    exl echo "Error: log bucket not defined";  # just add this message to the log file, which may help debugging by ssh
+    shutdown -h $SHUTDOWN_MIN;
+fi
+# tibanna version and awsf image should also be defined
+if [ -z "$TIBANNA_VERSION" ]; then
+    exl echo "Error: tibanna lambda version is not defined";
+    handle_error;
+fi
+if [ -z "$AWSF_IMAGE" ]; then
+    exl echo "Error: awsf docker image is not defined";
+    handle_error;
+fi
+
+### send job start message to S3
+send_job_started;
+
+### start logging
+### env
+TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+  -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-id)
+
+INSTANCE_TYPE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/instance-type)
+
+AMI_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/ami-id)
+
+AVAILABILITY_ZONE=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/placement/availability-zone)
+
+# For security groups, this returns a newline-separated list
+SECURITY_GROUPS_RAW=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+  http://169.254.169.254/latest/meta-data/security-groups)
+SECURITY_GROUPS=$(echo "$SECURITY_GROUPS_RAW" | paste -sd "," -)
+
+exl echo "## Tibanna version: $TIBANNA_VERSION"
+exl echo "## job id: $JOBID"
+exl echo "## instance type: $INSTANCE_TYPE"
+exl echo "## instance id: $INSTANCE_ID"
+exl echo "## instance region: $INSTANCE_REGION"
+exl echo "## instance user: $INSTANCE_USER"
+if [ "$INSTANCE_USER_FALLBACK" = true ]; then
+  exl echo "## WARNING: could not detect a known instance user (neither 'ubuntu' nor 'ec2-user' exists); defaulting to 'ubuntu'. $INSTANCE_HOME may not exist and subsequent steps (e.g. chown of $EBS_DIR) may fail."
+fi
+exl echo "## tibanna lambda version: $TIBANNA_VERSION"
+exl echo "## awsf image: $AWSF_IMAGE"
+exl echo "## ami id: $AMI_ID"
+exl echo "## availability zone: $AVAILABILITY_ZONE"
+exl echo "## security groups: $SECURITY_GROUPS"
+exl echo "## log bucket: $LOGBUCKET"
+exl echo "## shutdown min: $SHUTDOWN_MIN"
+exl echo "## kms_key_id: $S3_ENCRYPT_KEY_ID"
+exl echo
+exl echo "## Starting..."
+exl date
+
 
 ### sshd configure for password recognition
-echo -ne "$PASSWORD\n$PASSWORD\n" | passwd ubuntu
-sed 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config | sed 's/#PasswordAuthentication no/PasswordAuthentication yes/g' > tmpp
-mv tmpp /etc/ssh/sshd_config
-
-exl service ssh restart
-
-### sshd configure for password recognition
+exl echo
+exl echo "## Configuring and starting ssh"
 if [ ! -z $PASSWORD ]; then
-  echo -ne "$PASSWORD\n$PASSWORD\n" | sudo passwd ubuntu
+  echo -ne "$PASSWORD\n$PASSWORD\n" | sudo passwd $INSTANCE_USER
   sed 's/PasswordAuthentication no/PasswordAuthentication yes/g' /etc/ssh/sshd_config | sed 's/#PasswordAuthentication no/PasswordAuthentication yes/g' > tmpp
   mv tmpp /etc/ssh/sshd_config
-  exl service ssh restart
+  # SSH service unit differs by distro: "ssh" on Debian/Ubuntu, "sshd" on RHEL
+  if systemctl list-unit-files 2>/dev/null | grep -q '^ssh\.service'; then
+    SSH_SERVICE=ssh
+  else
+    SSH_SERVICE=sshd
+  fi
+  exl service $SSH_SERVICE restart
 fi
 
 
-### 2. get the run.json file and parse it to get environmental variables WDL_URL, MAIN_WDL, and LOGBUCKET and create an inputs.yml file (INPUT_YML_FILE).
-exl wget $SCRIPTS_URL/aws_decode_run_json.py
-exl wget $SCRIPTS_URL/aws_postrun.py
-exl wget $SCRIPTS_URL/aws_update_run_json.py
-exl wget $SCRIPTS_URL/aws_upload_output_update_json.py
-exl wget $SCRIPTS_URL/download_workflow.py
-exl wget $SCRIPTS_URL/defaultcromwell.conf -O /home/ubuntu/cromwell.conf
-#Install python patch script for watchtower
-wget $SCRIPTS_URL/wtower_patch.py -O /usr/local/lib/python2.7/dist-packages/watchtower/__init__.py
-wget $SCRIPTS_URL/aws_istat.sh -O /home/ubuntu/aws_istat.sh
-
-# install boto3, awscli version upgrade
-exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
-
-export postrunpy="`pwd`/aws_postrun.py"
-aws --version
-$postrunpy  -cmd message -message "Job init"
-$postrunpy  -cmd message -message "### Cloud Job Beginning ###"
-$postrunpy  -cmd message -message "Beginning remote execution on `hostname`"
-
-export MAXHOURS=34 #max time to run the instance before shutting it down
-echo sudo shutdown -h now | at now + $MAXHOURS hours
-
-exl echo "Json BUCKET=$JSON_BUCKET_NAME"
-exl echo "aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME ."
-
-exl aws s3 cp s3://$JSON_BUCKET_NAME/$RUN_JSON_FILE_NAME .
-exl chown -R ubuntu .
-exl chmod -R +x .
-exl ./aws_decode_run_json.py $RUN_JSON_FILE_NAME
-
-#Add docker logging info
-echo "DOCKER LOG INFO $JOBID : awslogs get -s2d --timestamp  $LOG_GROUP $LOG_STREAM" >> $LOGFILE
-send_log
-
-exl echo "Updating instance id"
-$postrunpy   -cmd instance -instance $INSTANCE_ID
-send_log
-
-if [ -e $ENV_FILE ];then
-	source $ENV_FILE
-fi
-
-
-###  mount the EBS volume to the EBS_DIR
+###  mount the EBS volume to the EBS_DIR (This has changed and only works with the new ubuntu 20.04 AMI)
+exl echo
+exl echo "## Mounting EBS"
 exl lsblk $TMPLOGFILE
-export EBS_DEVICE=/dev/$(lsblk | tail -1 | cut -f1 -d' ')
+exl export ROOT_EBS=$(lsblk -o PKNAME | tail -n +2 | awk '$1!=""' | sort -u)
+# Select the data EBS to format/mount. Tibanna attaches a single blank data EBS, but
+# some instance types also expose instance-store (ephemeral) NVMe disks, so more than
+# one non-root disk can be present. Pick exactly one device (a multi-line EBS_DEVICE
+# would break mkfs): prefer a disk with no filesystem and no mountpoint (the freshly
+# attached, unformatted data EBS), falling back to the first candidate.
+CANDIDATE_DISKS=$(lsblk -o TYPE,KNAME | tail -n +2 | grep disk | grep -v "$ROOT_EBS" | awk '{print $2}')
+exl echo "## Data EBS candidate disks: $(echo $CANDIDATE_DISKS | tr '\n' ' ')"
+EBS_DEVICE=
+for _disk in $CANDIDATE_DISKS; do
+  _fstype=$(lsblk -no FSTYPE "/dev/$_disk" | grep -v '^$' | head -n 1)
+  _mnt=$(lsblk -no MOUNTPOINT "/dev/$_disk" | grep -v '^$' | head -n 1)
+  if [ -z "$_fstype" ] && [ -z "$_mnt" ]; then
+    EBS_DEVICE=/dev/$_disk
+    break
+  fi
+done
+[ -z "$EBS_DEVICE" ] && EBS_DEVICE=/dev/$(echo "$CANDIDATE_DISKS" | head -n 1)
+export EBS_DEVICE
 exl mkfs -t ext4 $EBS_DEVICE # creating a file system
-exl mkdir $EBS_DIR
-
-
-######### CHANGING OF MOUNT
-#Need to switch config in tibanna for:   "ebs_size": 50 and "root_ebs_size": 300 , making root_ebs_size large
-#Proposed Changes the mount_point
-exl mkdir /dataebs
-exl mount $EBS_DEVICE /dataebs # mount ebs, remove to change bacl
-exl chown -R ubuntu /dataebs
-exl chmod -R +x /dataebs
-
-#Remove this part for root volume usage
-#exl mount $EBS_DEVICE $EBS_DIR # mount , uncomment to change back
-
-exl chown -R ubuntu $EBS_DIR
+exl mkdir /mnt/$EBS_DIR
+exl mount $EBS_DEVICE /mnt/$EBS_DIR  # mount
+exl ln -s /mnt/$EBS_DIR $EBS_DIR
+exl chown -R $INSTANCE_USER $EBS_DIR
 exl chmod -R +x $EBS_DIR
+exl echo "Mounting finished."
+exl echo "Data EBS file system: $EBS_DEVICE"
 
 
-### create subdirectories under the mounted ebs directory and move log file into that output directory
+### create local outdir under the mounted ebs directory and move log file into that output directory
 exl mkdir -p $LOCAL_OUTDIR
-exl mkdir -p $LOCAL_INPUT_DIR
-exl mkdir -p $LOCAL_REFERENCE_DIR
-exl mkdir -p $LOCAL_WFDIR
 mv $LOGFILE1 $LOGFILE2
-LOGFILE=$LOGFILE2
-send_log
+export LOGFILE=$LOGFILE2
 
-### download cwl from github or any other url.
-
-# install boto3, awscli version upgrade
-exl pip install boto3==1.15 awscli==1.18.152 urllib3==1.22 botocore==1.18.11
-exl echo "Installed deps for AWS .."
-
-$postrunpy -cmd status -status "downloading-workflow"
-exl ./download_workflow.py
-
-exl echo "Workflow downloaded"
-
-# set up cronjojb for cloudwatch metrics for memory, disk space and CPU utilization
+exl echo
 cwd0=$(pwd)
 cd ~
-apt-get update -y
-apt-get install -y unzip libwww-perl libdatetime-perl
-curl https://aws-cloudwatch.s3.amazonaws.com/downloads/CloudWatchMonitoringScripts-1.2.2.zip -O
-unzip CloudWatchMonitoringScripts-1.2.2.zip && rm CloudWatchMonitoringScripts-1.2.2.zip && cd aws-scripts-mon
-echo "*/1 * * * * ~/aws-scripts-mon/mon-put-instance-data.pl --mem-util --mem-used --mem-avail --disk-space-util --disk-space-used --disk-path=/data1/ --from-cron" > cloudwatch.jobs
-echo "*/1 * * * * ~/aws-scripts-mon/mon-put-instance-data.pl --disk-space-util --disk-space-used --disk-path=/ --from-cron" >> cloudwatch.jobs
-echo "*/1 * * * * top -b | head -15 >> $LOGFILE; du -h $LOCAL_INPUT_DIR/ >> $LOGFILE; du -h $LOCAL_WF_TMPDIR*/ >> $LOGFILE; du -h $LOCAL_OUTDIR/ >> $LOGFILE; aws s3 cp $LOGFILE s3://$LOGBUCKET &>/dev/null" >> cloudwatch.jobs
-cat cloudwatch.jobs | crontab -
-cd $cwd0
 
-#Log for EC2 interruption: we want to record this in the log file
-bash /home/ubuntu/aws_istat.sh $LOGFILE s3://$LOGBUCKET/$JOBID.term  $LOGBUCKET &
-exl echo Enabled EC2 interruption checking
-
-
-### prepare for file mounting
-exl curl -O -L http://bit.ly/goofys-latest
-exl chmod +x goofys-latest
-exl echo "user_allow_other" >> /etc/fuse.conf
-export GOOFYS_COMMAND='./goofys-latest -o allow_other -o nonempty'
-
-if [[ ! -z "$TIBANNA_VERSION" && "$TIBANNA_VERSION" > '0.18' ]]; then
-  pip install awscli -U;
-  #exl docker login --username AWS --password $(aws ecr get-login-password --region $INSTANCE_REGION) $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com;
-fi
-
-
-$postrunpy -cmd status -status "downloading-inputs"
-### download data & reference files from s3
-exl echo "DOWNLOADING INPUTS.."
-exl cat $DOWNLOAD_COMMAND_FILE
-exl date 
-exle source $DOWNLOAD_COMMAND_FILE 
-exl date
-exl ls -ltrh
-exl df -h
-exl echo "INPUTS HAVE COMPLETELY DOWNLOADED"
-send_log 
-
-if [ -e $ENV_FILE ];then
-source $ENV_FILE
-exl echo "Testing AWS CLI..."
-aws s3 ls $OUTBUCKET | head -20
-#echo checkpoint1 > checkpoint1.txt
-#aws s3 cp checkpoint1.txt $WDL_URL
-#exl cat $ENV_FILE
-#exl echo "ENVS END"
-fi
-
-
-$postrunpy  -cmd message -message "Mounting input buckets"
-### mount input buckets
-exl cat $MOUNT_COMMAND_FILE
-exl date
-exle source $MOUNT_COMMAND_FILE
-exl date
-exl ls
-send_log
-
-### just some more logging
-exl df
-exl pwd
-exl ls -lh /
-exl ls -lh $EBS_DIR
-exl ls -lhR $LOCAL_INPUT_DIR
-exl ls -lhR $LOCAL_WFDIR
-send_log
-
-### run command
-cwd0=$(pwd)
-cd $LOCAL_WFDIR  
-mkdir -p $LOCAL_WF_TMPDIR
-#send_log_regularly &
-
-
-if [[ $LANGUAGE == 'wdl' ]]
-then
-#Make cromwell option file
-cat << HERE > cromwell_options.json
-{
-    "final_workflow_outputs_dir" : "$LOCAL_OUTDIR"
-}
-HERE
-  #Run cromwelll with options to write outputs to $LOCAL_OUTDIR
-    echo Subbing $JOBID for logging	
-    $postrunpy  -cmd message -message "Starting Cromwell"
-    $postrunpy -cmd status -status "running-cromwell"
-     sed -i  "s/bioinfo_docker/biodocker_$JOBID/"  /home/ubuntu/cromwell.conf
-    
-    $postrunpy  -cmd message -message "Entering Docker logging space"
-   export s3buck=$OUTBUCKET
-    #Make a backup script
-    ( echo export JOBID=$JOBID;echo cd $PWD; echo java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json; echo aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/ ) > /home/ubuntu/runCromwellz.cmd.sh
-	
-     #Cromwell command or fail with message and sync the cromwell-executions folder
-     java -Xmx4g -Dconfig.file=/home/ubuntu/cromwell.conf -jar ~ubuntu/cromwell/cromwell.jar \
-	run $MAIN_WDL -i $cwd0/$INPUT_YML_FILE -m $LOGJSONFILE -o cromwell_options.json >> $LOGFILE 2>> $LOGFILE \
-	|| ( $postrunpy  -cmd message -message "Cromwell Failed,backing up outputs";  aws s3 sync --no-follow-symlinks --quiet /data1/wdl/  s3://$s3buck/$JOBID.workflow/ ; echo  "Cromwell_Failed: $JOBID $INSTANCE_ID " >> $LOGFILE ;$postrunpy -cmd status -status "failed" )
-    send_log
-
-  	exl echo "Cromwell run done"
-	exl echo "aws s3 sync --no-follow-symlinks --quiet /data1/wdl/  s3://$s3buck/$JOBID.workflow/ "
-
-    $postrunpy  -cmd message -message "Cromwell Execution done"
-    $postrunpy -cmd status -status "syncing-outputs"
-    
-    send_log
-  
-elif [[ $LANGUAGE == 'snakemake' ]]
-then
-  exl echo "running $COMMAND in docker image $CONTAINER_IMAGE..."
-  docker run --privileged -v $EBS_DIR:$EBS_DIR:rw -w $LOCAL_WFDIR $DOCKER_ENV_OPTION $CONTAINER_IMAGE sh -c "$COMMAND" >> $LOGFILE 2>> $LOGFILE; ERRCODE=$?; STATUS+=,$ERRCODE;
-  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi;
-  LOGJSONFILE='-'  # no file
-elif [[ $LANGUAGE == 'shell' ]]
-then
-  exl echo "running $COMMAND in docker image $CONTAINER_IMAGE..."
-  exl echo "docker run --privileged -v $EBS_DIR:$EBS_DIR:rw -w $LOCAL_WFDIR $DOCKER_ENV_OPTION $CONTAINER_IMAGE sh -c \"$COMMAND\""
-  docker run --privileged -v $EBS_DIR:$EBS_DIR:rw -w $LOCAL_WFDIR $DOCKER_ENV_OPTION $CONTAINER_IMAGE sh -c "$COMMAND" >> $LOGFILE 2>> $LOGFILE; ERRCODE=$?; STATUS+=,$ERRCODE;
-  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then send_error; fi;
-  LOGJSONFILE='-'  # no file
-elif [[ $LANGUAGE == 'rawbash' ]]
-then
-  #Raw Bash shell mode (addition), allows us to run whatever we want
-  $postrunpy  -cmd message -message "Raw bash mode: Bash Command"
-  SCRIPTNAME=`basename $CONTAINER_IMAGE`
-  aws s3 cp $CONTAINER_IMAGE $SCRIPTNAME
-  exl echo "running bash $SCRIPTNAME  as rawbash" >> $LOGFILE
-
-  $postrunpy -cmd status -status "running-shell"
-
-  bash $SCRIPTNAME  2>&1 | tee -a $LOGFILE
-  ERRCODE=$?; STATUS+=,$ERRCODE;
-  if [ "$ERRCODE" -ne 0 -a ! -z "$LOGBUCKET" ]; then 
-        $postrunpy -cmd status -status "failed"
-	send_error
+if [ "$DISABLE_METRICS_COLLECTION" = false ] ; then
+  exl echo "## Installing and activating Cloudwatch agent to collect metrics"
+  # Normalize architecture string used in CW agent download URLs (amd64 / arm64)
+  _RAW_ARCH="$(uname -m)"
+  case "$_RAW_ARCH" in
+    x86_64)  CW_ARCH="amd64" ;;
+    aarch64) CW_ARCH="arm64" ;;
+    *)       CW_ARCH="$_RAW_ARCH" ;;
+  esac
+  if command -v dpkg &>/dev/null; then
+    CW_AGENT_LINK="https://s3.amazonaws.com/amazoncloudwatch-agent/ubuntu/${CW_ARCH}/latest/amazon-cloudwatch-agent.deb"
+    exl echo "Loading Cloudwatch Agent from ${CW_AGENT_LINK}"
+    curl -fsSL "${CW_AGENT_LINK}" -o amazon-cloudwatch-agent.deb
+    dpkg -i -E ./amazon-cloudwatch-agent.deb
   else
-	 $postrunpy -cmd status -status "completed" 
-   fi
-  send_log
-
-  export s3buck=$OUTBUCKET
-  aws s3 sync $LOCAL_OUTDIR/ s3://$s3buck/$JOBID.workflow/
-  exl echo Files synced to S3
-  
-  $postrunpy  -cmd addfiles
-  exl echo Files added to database for $JOBID
- 
-  LOGJSONFILE='-'  # no file
-  exl echo "running Bash $SCRIPTNAME  completed " >> $LOGFILE
-else
-  if [[ $LANGUAGE == 'cwl_draft3' ]]
-  then
-    # older version of cwltoolthat works with draft3
-    pip uninstall cwltool
-    git clone https://github.com/SooLee/cwltool
-    cd cwltool
-    git checkout c7f029e304d1855996218f1c7c12ce1a5c91b8ef
-    python setup.py install
-    cd $LOCAL_WFDIR
+    CW_AGENT_LINK="https://s3.amazonaws.com/amazoncloudwatch-agent/redhat/${CW_ARCH}/latest/amazon-cloudwatch-agent.rpm"
+    exl echo "Loading Cloudwatch Agent from ${CW_AGENT_LINK}"
+    curl -fsSL "${CW_AGENT_LINK}" -o amazon-cloudwatch-agent.rpm
+    rpm -U ./amazon-cloudwatch-agent.rpm
   fi
-  exlj cwltool --enable-dev --non-strict --no-read-only --no-match-user --outdir $LOCAL_OUTDIR --tmp-outdir-prefix $LOCAL_WF_TMPDIR --tmpdir-prefix $LOCAL_WF_TMPDIR $PRESERVED_ENV_OPTION $SINGULARITY_OPTION $MAIN_CWL $cwd0/$INPUT_YML_FILE
+  # If we want to collect new metrics, the following file has to be modified
+  exl echo "## Using CW Agent config: https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf3/cloudwatch_agent_config.json"
+  curl -fsSL https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf3/cloudwatch_agent_config.json \
+    -o /opt/aws/amazon-cloudwatch-agent/bin/config.json
+  # This starts the agent with the downloaded configuration file
+  sudo /opt/aws/amazon-cloudwatch-agent/bin/amazon-cloudwatch-agent-ctl -a fetch-config -m ec2 -s -c file:/opt/aws/amazon-cloudwatch-agent/bin/config.json
+else
+  exl echo "## Metrics collection is disabled"
 fi
+
+
+
+# Set up cronjob to monitor AWS spot instance termination notice.
+# Works only in deployed Tibanna version >=1.6.0 since the ec2 needed more permissions to call `aws ec2 describe-spot-instance-requests`
+# Since cron only has a resolution of 1 min, we set up 2 jobs and let one sleep for 30s, to get a resolution of 30s.
+if [ $(version $TIBANNA_VERSION) -ge $(version "1.6.0") ]; then
+  # Get IMDSv2 token and instance ID
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" \
+    -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+  INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" \
+    http://169.254.169.254/latest/meta-data/instance-id)
+  is_spot_instance=$(aws ec2 describe-spot-instance-requests \
+    --filters Name=instance-id,Values="$INSTANCE_ID" \
+    --region "$INSTANCE_REGION" \
+    | python3 -c "import sys, json; print(len(json.load(sys.stdin)['SpotInstanceRequests']))")
+  if [ "$is_spot_instance" = "1" ]; then
+    exl echo
+    exl echo "## Turning on Spot instance failure detection"
+    cd ~
+    curl https://raw.githubusercontent.com/4dn-dcic/tibanna/master/awsf3/spot_failure_detection.sh -O
+    chmod +x spot_failure_detection.sh
+    if [ -z "$S3_ENCRYPT_KEY_ID" ];
+    then
+      echo "* * * * * ~/spot_failure_detection.sh -s 0 -l $LOGBUCKET -j $JOBID  >> /var/log/spot_failure_detection.log 2>&1" >> ~/recurring.jobs
+      echo "* * * * * ~/spot_failure_detection.sh -s 30 -l $LOGBUCKET -j $JOBID  >> /var/log/spot_failure_detection.log 2>&1" >> ~/recurring.jobs
+    else
+      echo "* * * * * ~/spot_failure_detection.sh -s 0 -l $LOGBUCKET -j $JOBID -k $S3_ENCRYPT_KEY_ID  >> /var/log/spot_failure_detection.log 2>&1" >> ~/recurring.jobs
+      echo "* * * * * ~/spot_failure_detection.sh -s 30 -l $LOGBUCKET -j $JOBID -k $S3_ENCRYPT_KEY_ID  >> /var/log/spot_failure_detection.log 2>&1" >> ~/recurring.jobs
+    fi
+  fi
+fi
+
+# Send the collected jobs to cron
+cat ~/recurring.jobs | crontab -
+
 cd $cwd0
-send_log 
 
-### copy output files to s3
-find $LOCAL_OUTDIR/ -type f |xargs md5sum {} \
-| grep -v "$LOGFILE" >> $MD5FILE ;  ## calculate md5sum for output files (except log file, to avoid confusion)
-mv $MD5FILE $LOCAL_OUTDIR
-exl date ## done time
+# set additional profile
+if [ -z $REGION ]; then
+  export REGION=$INSTANCE_REGION
+fi
+if [ ! -z $ACCESS_KEY -a ! -z $SECRET_KEY -a ! -z $REGION ]; then
+  echo -ne "$ACCESS_KEY\n$SECRET_KEY\n$REGION\njson" | aws configure --profile user1
+fi
+
+### Wait for the docker daemon to be ready before using it.
+### On the RHEL AMI, Docker is started at boot by systemd and this userdata can
+### race ahead of dockerd; "docker info" only succeeds once the daemon is up,
+### otherwise the ECR login below fails with "Cannot connect to the Docker daemon".
+### On the Ubuntu AMI Docker is already up, so this loop passes on the first try.
+if [ -z "$CONTAINER_CMD" ]; then
+  exl echo "Error: docker not found on this instance"
+  handle_error 1
+fi
+exl echo
+exl echo "## Waiting for container engine ($CONTAINER_CMD) to be ready"
+container_tries=0
+until $CONTAINER_CMD info >/dev/null 2>&1; do
+  container_tries=$((container_tries+1))
+  if [ $container_tries -ge 30 ]; then
+    exl echo "Error: container engine ($CONTAINER_CMD) did not become ready after $container_tries attempts"
+    handle_error 1
+    break
+  fi
+  sleep 2
+done
+exl echo "## Container engine ready after $container_tries attempt(s)"
+
+### Load the host kernel modules the nested (in-container) dockerd needs.
+### The AWSF container starts its own dockerd to run the workflow's tool images.
+### That dockerd uses iptables-legacy and overlayfs and shares the host kernel,
+### but RHEL 9 doesn't load the legacy netfilter modules by default (it uses
+### nftables) and 'modprobe' isn't available inside the container -- so without
+### this the nested dockerd dies with "can't initialize iptables table 'nat'".
+### Each module is loaded independently so one failure can't block the rest.
+### Harmless on the Ubuntu AMI, where these are typically already loaded.
+exl echo
+exl echo "## Loading kernel modules for nested docker"
+for _mod in overlay br_netfilter ip_tables iptable_nat iptable_filter iptable_mangle; do
+  modprobe "$_mod" 2>/dev/null || exl echo "## note: could not load kernel module $_mod (may be built-in or unavailable)"
+done
+
+### log into ECR if necessary
+exl echo
+exl echo "## Logging into ECR"
+exl echo "Logging into ECR $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com..."
+exlo $CONTAINER_CMD login --username AWS --password $(aws ecr get-login-password --region $INSTANCE_REGION) $AWS_ACCOUNT_ID.dkr.ecr.$INSTANCE_REGION.amazonaws.com;
 send_log
-exl ls -lhtrR $LOCAL_OUTDIR/
-exl ls -lhtr $EBS_DIR/
-exl ls -lhtrR $LOCAL_INPUT_DIR/
-exl ls -lhtrR $LOCAL_WFDIR/
-#exle aws s3 cp --recursive $LOCAL_OUTDIR s3://$OUTBUCKET
-if [[ $LANGUAGE == 'wdl' ]]
+
+# send log before starting docker
+exl echo
+exl echo "## Running dockerized awsf scripts"
+send_log
+
+# run dockerized awsf scripts
+# wrap docker pull in some retry logic in case of
+# network failures (seen frequently) - Will Sept 22 2021
+exl echo "## Pulling Docker image"
+tries=0
+until [ $tries -ge 3 ]; do
+  if exl_no_error $CONTAINER_CMD pull $AWSF_IMAGE; then
+    exl echo "## Pull successfull on try $tries"
+    break
+  else
+    ((tries++))
+    sleep 60
+  fi
+done
+send_log
+# will fail here now if docker pull is not successful after multiple attempts
+# pass S3_ENCRYPT_KEY_ID if desired
+if [ -z "$S3_ENCRYPT_KEY_ID" ];
 then
-  LANGUAGE_OPTION=wdl
-elif [[ $LANGUAGE == 'snakemake' ]]
-then
-  LANGUAGE_OPTION=snakemake
-elif [[ $LANGUAGE == 'shell' ]]
-then
-  LANGUAGE_OPTION=shell
-elif [[ $LANGUAGE == 'rawbash' ]]
-then
-  LANGUAGE_OPTION=shell
+  $CONTAINER_CMD run --privileged --net host -e HOST_HOME=$INSTANCE_HOME -v $INSTANCE_HOME/:$INSTANCE_HOME/:rw -v /mnt/:/mnt/:rw $AWSF_IMAGE run.sh -i $JOBID -l $LOGBUCKET -f $EBS_DEVICE -S $STATUS $SINGULARITY_OPTION_TO_PASS
 else
-  LANGUAGE_OPTION=
+  $CONTAINER_CMD run --privileged --net host -e HOST_HOME=$INSTANCE_HOME -v $INSTANCE_HOME/:$INSTANCE_HOME/:rw -v /mnt/:/mnt/:rw $AWSF_IMAGE run.sh -i $JOBID -l $LOGBUCKET -f $EBS_DEVICE -S $STATUS $SINGULARITY_OPTION_TO_PASS -k $S3_ENCRYPT_KEY_ID
 fi
+CONTAINER_RC=$?
 
-
-set -x
-echo "INFO: Running modified Z-data download: AWS Sync"
-if [[ $LANGUAGE == 'wdl' ]];then
-	echo "`date` WDL Doing a copy of the wdl folder"
-	echo "`date` Doing a copy of the wdl folder" >> $LOGFILE
-  	send_log
-
-        $postrunpy  -cmd message -message "Uploading outputs to S3..."
-
-  	echo "Local outdir is $LOCAL_OUTDIR"
-	
-	export s3buck=$OUTBUCKET 
-        export WDL_URL=s3://$s3buck/$JOBID.workflow
-
-	echo aws s3 sync $LOCAL_OUTDIR/ $WDL_URL >> $LOGFILE
-	send_log
-
-	aws s3 sync $LOCAL_OUTDIR/ $WDL_URL 
-	#copy file listing over
-	$postrunpy -cmd message -message  "File sync to S3 complete to $WDL_URL"
-	echo "`date` S3 upload done" >> $LOGFILE
-  	send_log
-  	$postrunpy  -cmd addfiles
-	exl echo "`date` Files sync'd to dynamodb" 
-
-
-	$postrunpy -cmd message -message "running-postcleanup"
-	aws s3api  list-objects-v2 --prefix  $JOBID.workflow  --bucket $s3buck > listing.txt
-	aws s3  cp listing.txt  s3://$s3buck/$JOBID.outfiles
-	
-
-	cat listing.txt  >> $LOGFILE
-  	send_log
-	
-	echo "`date` listing created for $JOBID" >> $LOGFILE
-	send_log
-        $postrunpy  -cmd message -message "Cloud file listing created"
-
-	
-         $postrunpy -cmd status -status "finishing"
-
-	touch $JOBID.success 
-	aws s3 cp $JOBID.success s3://$LOGBUCKET/ #This will trigger job success to be found in the polling script 
-         $postrunpy  -cmd message -message "Success file created $JOBID.success"
-
-  	echo "`date` success file $JOBID.success uploaded" >> $LOGFILE
-  	send_log
-  
-	 curl http://169.254.169.254/latest/meta-data/instance-id >> $LOGFILE
-	send_log
-
-
-fi
-
-
-$postrunpy  -cmd message -message "Running AWS update_run_json py"
-
-echo "Running AWS update_run_json" >> $LOGFILE && send_log
-
-./aws_upload_output_update_json.py $RUN_JSON_FILE_NAME $LOGJSONFILE $LOGFILE $LOCAL_OUTDIR/$MD5FILE $POSTRUN_JSON_FILE_NAME $LANGUAGE_OPTION
-mv $POSTRUN_JSON_FILE_NAME $RUN_JSON_FILE_NAME
-send_log
- 
-### updating status
-# status report should be improved.
-if [ $(echo $STATUS| sed 's/0//g' | sed 's/,//g') ]; then export JOB_STATUS=$STATUS ; else export JOB_STATUS=0; fi ## if STATUS is 21,0,0,1 JOB_STATUS is 21,0,0,1. If STATUS is 0,0,0,0,0,0, JOB_STATUS is 0.
-# This env variable (JOB_STATUS) will be read by aws_update_run_json.py and the result will go into $POSTRUN_JSON_FILE_NAME. 
-### 8. create a postrun.json file that contains the information in the run.json file and additional information (status, stop_time)
-export INPUTSIZE=$(du -csh /data1/input| tail -1 | cut -f1)
-export TEMPSIZE=$(du -csh /data1/tmp*| tail -1 | cut -f1)
-export OUTPUTSIZE=$(du -csh /data1/out| tail -1 | cut -f1)
-
-
-exl ./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
-#./aws_update_run_json.py $RUN_JSON_FILE_NAME $POSTRUN_JSON_FILE_NAME
-
-
-if [[ $PUBLIC_POSTRUN_JSON == '1' ]]
-then
-  aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME --acl public-read
+### ============================ CUSTOM: blanket S3 sync ============================
+### genomics-prod: do NOT rely on awsf3's declared-output upload (it under-declares and
+### crashes on Array[File] workflow outputs). Instead, blanket-sync the ENTIRE Cromwell
+### execution tree to s3://$LOGBUCKET/$JOBID.workflow/ with real filenames preserved.
+### Runs on the host (EBS mounted at $EBS_DIR, instance-role creds), independent of the
+### in-container awsf3 uploader -- so an awsf3 array crash does not lose outputs.
+exl echo
+exl echo "## CUSTOM blanket sync: $EBS_DIR/wdl/cromwell-executions/ -> s3://$LOGBUCKET/$JOBID.workflow/ (container rc=$CONTAINER_RC)"
+if [ -z "$S3_ENCRYPT_KEY_ID" ]; then
+  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ >> $LOGFILE 2>> $LOGFILE
 else
-  exle aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME
-  #aws s3 cp $POSTRUN_JSON_FILE_NAME s3://$LOGBUCKET/$POSTRUN_JSON_FILE_NAME
+  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
 fi
-if [ ! -z $JOB_STATUS -a $JOB_STATUS == 0 ]; then touch $JOBID.success; aws s3 cp $JOBID.success s3://$LOGBUCKET/; fi
+SYNC_RC=$?
+exl echo "## blanket sync rc=$SYNC_RC"
 send_log
 
-df -h >> $LOGFILE
-send_log
-
-
-# more comprehensive log for wdl
-if [[ $LANGUAGE == 'wdl' ]]
-then
-  cd $LOCAL_WFDIR
-  find . -type f -name 'stdout' -or -name 'stderr' -or -name 'script' -or \
-	-name '*.qc' -or -name '*.txt' -or -name '*.log' -or -name '*.png' -or -name '*.pdf' \
-	| xargs tar -zcvf debug.tar.gz
-  aws s3 cp debug.tar.gz s3://$LOGBUCKET/$JOBID.debug.tar.gz
+### Completion marker: stock Tibanna writes no <jobid>.success (check-postrun triggers on it).
+### The blanket sync is our source of truth for output capture, so mark success on sync rc==0,
+### tolerating awsf3's in-container array crash. A real sync failure -> error.
+### NOTE: this does not yet distinguish a genuine Cromwell workflow failure from an awsf3-only
+### crash; add Cromwell-rc/status inspection before using for production pipelines.
+if [ "$SYNC_RC" -eq 0 ]; then
+  touch $JOBID.success
+  if [ -z "$S3_ENCRYPT_KEY_ID" ]; then
+    aws s3 cp $JOBID.success s3://$LOGBUCKET/$JOBID.success
+  else
+    aws s3 cp $JOBID.success s3://$LOGBUCKET/$JOBID.success --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID"
+  fi
+  exl echo "## wrote success marker s3://$LOGBUCKET/$JOBID.success"
+  send_log
+else
+  exl echo "## blanket sync FAILED (rc=$SYNC_RC)"
+  handle_error "$SYNC_RC"
 fi
+### ========================== END CUSTOM: blanket S3 sync =========================
 
-### how do we send a signal that the job finished?
-#<some script>
- 
 ### self-terminate
 # (option 1)  ## This is the easiest if the 'shutdown behavior' set to 'terminate' for the instance at launch.
-sudo shutdown -h $SHUTDOWN_MIN 
+shutdown -h $SHUTDOWN_MIN
 # (option 2)  ## This works only if the instance is given a proper permission (This is more standard but I never actually got it to work)
 #id=$(ec2-metadata -i|cut -d' ' -f2)
 #aws ec2 terminate-instances --instance-ids $id
