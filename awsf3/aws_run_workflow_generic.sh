@@ -416,12 +416,27 @@ CONTAINER_RC=$?
 ### in-container awsf3 uploader -- so an awsf3 array crash does not lose outputs.
 exl echo
 exl echo "## CUSTOM blanket sync: $EBS_DIR/wdl/cromwell-executions/ -> s3://$LOGBUCKET/$JOBID.workflow/ (container rc=$CONTAINER_RC)"
-if [ -z "$S3_ENCRYPT_KEY_ID" ]; then
-  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --exclude "*/vep_data/*" >> $LOGFILE 2>> $LOGFILE
-else
-  aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --exclude "*/vep_data/*" --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
-fi
+# Exclusions: localized inputs/refs, tmp, unpacked VEP cache, and STAR-Fusion/FusionInspector
+# working-dir intermediates. fi_workdir/ and star-fusion.preliminary/ are NOT deliverables (the
+# catalog already skips them) and their files churn/rotate after the workflow "finishes", which
+# makes `aws s3 sync` fail an upload with an 'ETag' error (rc=1). Excluding them is both correct
+# (not deliverables) and avoids that failure.
+do_blanket_sync() {
+  if [ -z "$S3_ENCRYPT_KEY_ID" ]; then
+    aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --exclude "*/vep_data/*" --exclude "*/fi_workdir/*" --exclude "*/star-fusion.preliminary/*" >> $LOGFILE 2>> $LOGFILE
+  else
+    aws s3 sync $EBS_DIR/wdl/cromwell-executions/ s3://$LOGBUCKET/$JOBID.workflow/ --exclude "*/inputs/*" --exclude "*/tmp.*/*" --exclude "*/vep_data/*" --exclude "*/fi_workdir/*" --exclude "*/star-fusion.preliminary/*" --sse aws:kms --sse-kms-key-id "$S3_ENCRYPT_KEY_ID" >> $LOGFILE 2>> $LOGFILE
+  fi
+}
+do_blanket_sync
 SYNC_RC=$?
+# rc=1 = a real transfer failure; retry once in case it was transient (network/throttle).
+if [ "$SYNC_RC" -eq 1 ]; then
+  exl echo "## blanket sync rc=1 (transfer failure) -- retrying once after 15s"
+  sleep 15
+  do_blanket_sync
+  SYNC_RC=$?
+fi
 exl echo "## blanket sync rc=$SYNC_RC"
 send_log
 
